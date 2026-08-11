@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from . import db
 from .config import load_service_config
 
 _bearer = HTTPBearer(auto_error=False)
@@ -17,25 +18,61 @@ _bearer = HTTPBearer(auto_error=False)
 _tokens: dict[str, int] = {}
 
 TOKEN_TTL_SEC = 24 * 60 * 60  # 24 hours
+PBKDF2_ITERATIONS = 200_000
 
 
-def panel_password() -> str:
+def initial_password() -> str:
     return load_service_config().panel_password
 
 
 def is_auth_enabled() -> bool:
-    return bool(panel_password())
+    # Auth is considered enabled if a default password is set (enables first login).
+    return bool(initial_password())
 
 
-def _sign(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+def _hash_password(password: str, salt: str) -> str:
+    return hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt.encode("utf-8"), PBKDF2_ITERATIONS
+    ).hex()
 
 
-def verify_password(candidate: str) -> bool:
-    expected = panel_password()
-    if not expected:
+def _new_salt() -> str:
+    return secrets.token_hex(16)
+
+
+def ensure_default_user() -> None:
+    """Create the default admin user on first boot (password from QUOTAHUB_PASSWORD)."""
+    if db.list_panel_users():
+        return
+    password = initial_password()
+    if not password:
+        return
+    salt = _new_salt()
+    db.upsert_panel_user(db.DEFAULT_USERNAME, _hash_password(password, salt), salt)
+
+
+def verify_credentials(username: str, password: str) -> bool:
+    user = db.get_panel_user(username.strip())
+    if user is None:
+        # Constant-time-ish: still hash to reduce username enumeration timing.
+        _hash_password(password, _new_salt())
         return False
-    return hmac.compare_digest(_sign(candidate), _sign(expected))
+    expected = _hash_password(password, user["salt"])
+    return hmac.compare_digest(expected, user["password_hash"])
+
+
+def change_credentials(new_username: str, new_password: str) -> None:
+    # Replace all existing panel users with the single new credential.
+    for username in db.list_panel_users():
+        db.delete_panel_user(username)
+    salt = _new_salt()
+    db.upsert_panel_user(
+        new_username.strip() or db.DEFAULT_USERNAME,
+        _hash_password(new_password, salt),
+        salt,
+    )
+    # Reset all issued tokens so a credential change forces re-login everywhere.
+    _tokens.clear()
 
 
 def create_token() -> str:

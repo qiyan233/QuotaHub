@@ -11,7 +11,6 @@ from .config import (
     save_settings_payload,
 )
 
-
 def ensure_settings_migrated() -> None:
     if db.has_service_settings():
         return
@@ -63,3 +62,6 @@ def ensure_bootstrapped() -> None:
     db.init_db()
     ensure_settings_migrated()
     ensure_accounts_imported()
+    from .auth import ensure_default_user
+
+    ensure_default_user()

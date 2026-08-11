@@ -11,7 +11,13 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from . import db
-from .auth import create_token, is_auth_enabled, require_auth, verify_password
+from .auth import (
+    change_credentials,
+    create_token,
+    is_auth_enabled,
+    require_auth,
+    verify_credentials,
+)
 from .bootstrap import ensure_bootstrapped
 from .analytics import build_overview
 from .config import load_config, load_service_config, mask_cookie, mask_ollama_cookie, update_service_config
@@ -100,6 +106,7 @@ accounts_router = APIRouter(prefix="/api/accounts", tags=["accounts"], dependenc
 async def login(request: Request, body: dict[str, str]) -> dict:
     import time as _time
 
+    username = (body.get("username") or "").strip() or db.DEFAULT_USERNAME
     password = (body.get("password") or "").strip()
     if not is_auth_enabled():
         return {"token": None, "enabled": False}
@@ -120,17 +127,27 @@ async def login(request: Request, body: dict[str, str]) -> dict:
             headers={"Retry-After": str(remaining)},
         )
 
-    if not verify_password(password):
+    if not verify_credentials(username, password):
         fail_count = db.record_login_failure(ip, now)
         if fail_count >= db.LOGIN_MAX_FAILURES:
             raise HTTPException(
                 status_code=429,
                 detail=f"登录失败次数过多，已临时锁定。请稍后重试",
             )
-        raise HTTPException(status_code=401, detail="密码错误")
+        raise HTTPException(status_code=401, detail="账号或密码错误")
 
     db.reset_login_attempt(ip)
-    return {"token": create_token(), "enabled": True}
+    return {"token": create_token(), "enabled": True, "username": username}
+
+
+@app.post("/api/auth/change-credentials", dependencies=[Depends(require_auth)])
+async def change_credentials_endpoint(body: dict[str, str]) -> dict:
+    new_username = (body.get("username") or "").strip() or db.DEFAULT_USERNAME
+    new_password = (body.get("password") or "").strip()
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="密码长度至少 6 位")
+    change_credentials(new_username, new_password)
+    return {"ok": True, "username": new_username}
 
 
 @app.get("/api/auth/status")

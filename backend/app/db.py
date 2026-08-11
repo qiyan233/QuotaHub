@@ -115,6 +115,13 @@ def init_db() -> None:
                 locked_until REAL,
                 last_fail_at REAL
             );
+
+            CREATE TABLE IF NOT EXISTS panel_users (
+                username TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
 
@@ -840,3 +847,49 @@ def is_login_locked(ip: str, now: float) -> tuple[bool, float | None]:
     if locked_until <= now:
         return False, None
     return True, locked_until
+
+
+# ---- Panel user (account + password) ----
+
+DEFAULT_USERNAME = "admin"
+
+
+def get_panel_user(username: str) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT username, password_hash, salt FROM panel_users WHERE username = ?",
+            (username,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "username": row["username"],
+        "password_hash": row["password_hash"],
+        "salt": row["salt"],
+    }
+
+
+def upsert_panel_user(username: str, password_hash: str, salt: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO panel_users (username, password_hash, salt, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(username) DO UPDATE SET
+                password_hash = excluded.password_hash,
+                salt = excluded.salt,
+                updated_at = excluded.updated_at
+            """,
+            (username, password_hash, salt, _now_iso()),
+        )
+
+
+def list_panel_users() -> list[str]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT username FROM panel_users").fetchall()
+    return [r["username"] for r in rows]
+
+
+def delete_panel_user(username: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM panel_users WHERE username = ?", (username,))

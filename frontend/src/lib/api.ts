@@ -279,11 +279,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  login: (password: string) =>
-    request<{ token: string | null; enabled: boolean }>("/api/auth/login", {
+  login: (username: string, password: string) =>
+    request<{ token: string | null; enabled: boolean; username?: string }>("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ username, password }),
+    }),
+  changeCredentials: (username: string, password: string) =>
+    request<{ ok: boolean; username: string }>("/api/auth/change-credentials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
     }),
   authEnabled: () =>
     request<{ enabled: boolean }>("/api/auth/status").catch(() => ({ enabled: true })),

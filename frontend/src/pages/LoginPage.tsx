@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -17,7 +18,7 @@ export default function LoginPage() {
     setLoading(true);
     setError("");
     try {
-      const res = await api.login(password);
+      const res = await api.login(username, password);
       if (res.token) {
         setToken(res.token);
         navigate("/", { replace: true });
@@ -40,24 +41,29 @@ export default function LoginPage() {
           </div>
           <div>
             <CardTitle className="text-xl">QuotaHub 登录</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">输入访问密码进入面板</p>
+            <p className="mt-1 text-sm text-muted-foreground">输入账号与密码进入面板</p>
           </div>
         </CardHeader>
         <CardContent>
           <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
             <Input
+              placeholder="账号"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoFocus
+            />
+            <Input
               type="password"
-              placeholder="访问密码"
+              placeholder="密码"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              autoFocus
             />
             {error && (
               <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
                 {error}
               </div>
             )}
-            <Button type="submit" className="w-full" disabled={loading || !password}>
+            <Button type="submit" className="w-full" disabled={loading || !username || !password}>
               {loading ? "登录中…" : "登录"}
             </Button>
           </form>
