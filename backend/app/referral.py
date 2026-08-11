@@ -135,6 +135,27 @@ def _find_matching(text: str, start: int, open_ch: str, close_ch: str) -> int | 
     return None
 
 
+def _find_string_end(text: str, start: int) -> int | None:
+    """Find the closing quote for a string starting at `start` (the opening quote)."""
+    if start >= len(text):
+        return None
+    quote = text[start]
+    if quote not in ('"', "'"):
+        return None
+    escaped = False
+    index = start + 1
+    while index < len(text):
+        byte = text[index]
+        if escaped:
+            escaped = False
+        elif byte == "\\":
+            escaped = True
+        elif byte == quote:
+            return index
+        index += 1
+    return None
+
+
 def _skip_whitespace_and_resource(text: str, start: int) -> int:
     index = start
     while index < len(text) and text[index].isspace():
@@ -163,7 +184,7 @@ def _read_value_at(text: str, start: int) -> str | None:
             return text[index : end + 1]
         return None
     if byte in ('"', "'"):
-        end = _find_matching(text, index, byte, byte)
+        end = _find_string_end(text, index)
         if end is not None:
             return text[index : end + 1]
         return None
@@ -255,7 +276,12 @@ def _parse_number(raw: str | None) -> float | None:
 
 
 def _parse_bool(raw: str | None) -> bool:
-    return (raw or "").strip() == "true"
+    value = (raw or "").strip()
+    if value == "!0":
+        return True
+    if value == "!1":
+        return False
+    return value == "true"
 
 
 def _find_referral_object(html: str) -> str | None:

@@ -24,11 +24,17 @@ function RewardStatusBadge({ status }: { status: string }) {
     available: "success",
     pending: "warning",
     applied: "default",
+    used: "default",
+    consumed: "default",
+    expired: "default",
   };
   const label: Record<string, string> = {
     available: "可领取",
     pending: "待处理",
-    applied: "已应用",
+    applied: "已使用",
+    used: "已使用",
+    consumed: "已使用",
+    expired: "已过期",
   };
   return <Badge variant={map[status] ?? "default"}>{label[status] ?? status}</Badge>;
 }
