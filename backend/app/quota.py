@@ -298,7 +298,9 @@ async def fetch_quota_for_account(account: AccountConfig, index: int) -> QuotaAc
                 has_referral = summary.has_referral
                 referral_reward_amount = summary.reward_amount
                 referral_available_amount = sum(
-                    reward.amount for reward in summary.rewards if reward.status == "available"
+                    reward.amount
+                    for reward in summary.rewards
+                    if reward.status.lower() == "available"
                 )
                 referral_code = summary.referral_code or ""
             except Exception:

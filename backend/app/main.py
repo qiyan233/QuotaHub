@@ -496,12 +496,19 @@ async def opencode_referral_apply(account_id: str, reward_id: str) -> dict[str, 
     if row is None:
         raise HTTPException(status_code=404, detail="账号不存在")
     workspace_id = row.resolved_workspace_id or row.workspace_id
+    # The apply side effect must be reported independently of the follow-up
+    # summary refresh: if the reward was credited but the refresh fails, we
+    # must NOT tell the user "领取失败" (they'd retry and double-apply).
     try:
         await apply_referral_reward(workspace_id, row.auth_cookie, reward_id)
-        summary = await fetch_referral_summary(workspace_id, row.auth_cookie)
-        return {"success": True, **summary.to_dict()}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
+    try:
+        summary = await fetch_referral_summary(workspace_id, row.auth_cookie)
+        return {"success": True, **summary.to_dict()}
+    except Exception:
+        # Reward applied; summary refresh failed. Surface success with a hint.
+        return {"success": True, "error": "赠金已领取，但刷新摘要失败", "reward_amount": 0.0, "rewards": [], "referral_code": "", "has_referral": True}
 
 
 @accounts_router.get("/opencode/{account_id}/usage")

@@ -156,6 +156,68 @@ def _find_string_end(text: str, start: int) -> int | None:
     return None
 
 
+# The in-place fallback reader truncates `$R[9]` to `$R[9` when the definition
+# is hoisted (no inline `=`), so tolerate a missing closing bracket.
+_RESOURCE_REF_RE = re.compile(r"\$R\[(\d+)")
+
+def collect_resource_refs(text: str) -> dict[int, str]:
+    """Collect `$R[n]=value` definitions scattered across the page.
+
+    OpenCode's serialized bundle may reference a value via ``$R[n]`` whose
+    definition appears elsewhere (hoisted), not inline after the field. The
+    naive in-place parser then truncates ``$R[9]`` to ``$R[9`` and reads the
+    array index instead of the real value. This pass gathers the definitions so
+    callers can substitute the referenced value before parsing.
+    """
+    refs: dict[int, str] = {}
+    index = 0
+    while True:
+        match = _RESOURCE_REF_RE.search(text, index)
+        if match is None:
+            break
+        n = int(match.group(1))
+        pos = match.end()
+        equals = text.find("=", pos, pos + 16)
+        if equals < 0:
+            index = match.end()
+            continue
+        # A `$R[n]=value` definition is either a scalar on one line or a
+        # bracketed block (array/object) that may span lines. Detect the block
+        # case and read it with _read_value_at (balanced matching); otherwise
+        # read to end-of-line.
+        value_start = equals + 1
+        while value_start < len(text) and text[value_start].isspace():
+            value_start += 1
+        if value_start < len(text) and text[value_start] in "[{(":
+            value = _read_value_at(text, value_start)
+            if value is not None:
+                refs.setdefault(n, value)
+        else:
+            line_end = text.find("\n", value_start)
+            if line_end < 0:
+                line_end = len(text)
+            segment = text[value_start:line_end].strip()
+            if segment:
+                refs.setdefault(n, segment)
+        index = match.end()
+    return refs
+
+
+def resolve_resource_ref(raw: str | None, refs: dict[int, str]) -> str | None:
+    """Replace a leading ``$R[n]`` reference in `raw` with its collected value."""
+    if not raw:
+        return raw
+    stripped = raw.lstrip()
+    match = _RESOURCE_REF_RE.match(stripped)
+    if match is None:
+        return raw
+    value = refs.get(int(match.group(1)))
+    if value is None:
+        return raw
+    # Recurse: the referenced value may itself be another $R[n] ref.
+    return resolve_resource_ref(value, refs)
+
+
 def _skip_whitespace_and_resource(text: str, start: int) -> int:
     index = start
     while index < len(text) and text[index].isspace():
@@ -296,35 +358,47 @@ def _find_referral_object(html: str) -> str | None:
         end = _find_matching(html, start, "{", "}")
         if end is not None and end > marker:
             block = html[start : end + 1]
-            if "rewardAmount" in block and "rewards" in block:
+            # Accept the block if it carries any referral-shaped field. Requiring
+            # both rewardAmount and rewards would reject accounts that have a
+            # referral code but an empty/omitted rewards payload, mislabelling
+            # them as "no referral".
+            if any(k in block for k in ("rewardAmount", "rewards", "hasReferral")):
                 return block
         search_end = start
     return None
 
 
-def _parse_reward_object(block: str) -> ReferralReward:
+def _parse_reward_object(block: str, refs: dict[int, str] | None = None) -> ReferralReward:
+    refs = refs or {}
+
+    def field(f: str) -> str | None:
+        return resolve_resource_ref(_read_field_value(block, f), refs)
+
     return ReferralReward(
-        id=_parse_string(_read_field_value(block, "id")),
-        source=_parse_string(_read_field_value(block, "source")),
-        status=_parse_string(_read_field_value(block, "status")),
-        email=_parse_string(_read_field_value(block, "email")),
-        amount=round((_parse_number(_read_field_value(block, "amount")) or 0.0) / 100.0, 2),
-        time_created=_parse_nullable_string(_read_field_value(block, "timeCreated")),
-        time_applied=_parse_nullable_string(_read_field_value(block, "timeApplied")),
+        id=_parse_string(field("id")),
+        source=_parse_string(field("source")),
+        status=_parse_string(field("status")),
+        email=_parse_string(field("email")),
+        amount=round((_parse_number(field("amount")) or 0.0) / 100.0, 2),
+        time_created=_parse_nullable_string(field("timeCreated")),
+        time_applied=_parse_nullable_string(field("timeApplied")),
     )
 
 
-def _parse_rewards(block: str) -> list[ReferralReward]:
+def _parse_rewards(block: str, refs: dict[int, str] | None = None) -> list[ReferralReward]:
+    refs = refs or {}
     raw = _read_field_value(block, "rewards") or ""
-    if not raw.strip().startswith("["):
+    # The rewards array may itself be a hoisted `$R[n]` reference.
+    resolved = resolve_resource_ref(raw, refs)
+    if not resolved or not resolved.strip().startswith("["):
         return []
     rewards: list[ReferralReward] = []
     index = 0
-    while index < len(raw):
-        if raw[index] == "{":
-            end = _find_matching(raw, index, "{", "}")
+    while index < len(resolved):
+        if resolved[index] == "{":
+            end = _find_matching(resolved, index, "{", "}")
             if end is not None:
-                reward = _parse_reward_object(raw[index : end + 1])
+                reward = _parse_reward_object(resolved[index : end + 1], refs)
                 if reward.id:
                     rewards.append(reward)
                 index = end
@@ -335,12 +409,22 @@ def _parse_rewards(block: str) -> list[ReferralReward]:
 def parse_referral_summary(html: str) -> ReferralSummary:
     block = _find_referral_object(html)
     if block is None:
-        raise ValueError("未解析到 OpenCode 邀请奖励数据，页面结构可能已变化")
+        # No referral block on the page — this is the normal "account never
+        # received / hasn't joined a referral" state, not a scrape failure.
+        # Return an empty summary so callers degrade gracefully instead of
+        # surfacing an error.
+        return ReferralSummary(referral_code="", has_referral=False, reward_amount=0.0, rewards=[])
+    # Hoisted `$R[n]=value` definitions live in the full page, not the block.
+    refs = collect_resource_refs(html)
+
+    def field(f: str) -> str | None:
+        return resolve_resource_ref(_read_field_value(block, f), refs)
+
     return ReferralSummary(
-        referral_code=_parse_string(_read_field_value(block, "referralCode")),
-        has_referral=_parse_bool(_read_field_value(block, "hasReferral")),
-        reward_amount=round((_parse_number(_read_field_value(block, "rewardAmount")) or 0.0) / 100.0, 2),
-        rewards=_parse_rewards(block),
+        referral_code=_parse_string(field("referralCode")),
+        has_referral=_parse_bool(field("hasReferral")),
+        reward_amount=round((_parse_number(field("rewardAmount")) or 0.0) / 100.0, 2),
+        rewards=_parse_rewards(block, refs),
     )
 
 

@@ -113,9 +113,16 @@ export default function AccountDetailPage() {
     if (!id) return;
     setReferralError("");
     try {
-      setPreview(await api.previewReferral(id, rewardId));
+      const res = await api.previewReferral(id, rewardId);
+      if (res.success === false) {
+        setReferralError(res.error || "预览失败");
+        setPreview(null);
+      } else {
+        setPreview(res);
+      }
     } catch (e) {
       setReferralError((e as Error).message);
+      setPreview(null);
     }
   };
 
@@ -147,10 +154,13 @@ export default function AccountDetailPage() {
   }, [id, loadAccount, refreshQuota]);
 
   useEffect(() => {
-    if (tab === "referral" && !referral && !referralLoading) {
+    // Only auto-load once. If a previous attempt failed, referral stays null
+    // but referralError is set — do not loop retrying. The user can click the
+    // refresh button to retry manually.
+    if (tab === "referral" && !referral && !referralLoading && !referralError) {
       void loadReferral();
     }
-  }, [tab, referral, referralLoading, loadReferral]);
+  }, [tab, referral, referralLoading, referralError, loadReferral]);
 
   if (!id) {
     return <p className="text-sm text-rose-600">无效账号 ID</p>;
@@ -306,6 +316,10 @@ export default function AccountDetailPage() {
               ) : referral?.success === false ? (
                 <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
                   {referral.error || "获取赠金信息失败"}
+                </div>
+              ) : referral?.has_referral === false && !referral?.referral_code ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-muted-foreground">
+                  该账号暂无赠金。
                 </div>
               ) : (
                 <>
