@@ -16,6 +16,7 @@ export interface OpenCodeAccount {
   workspace_id: string;
   resolved_workspace_id?: string | null;
   auth_cookie_masked: string;
+  api_key_masked?: string;
   configured: boolean;
   show_rolling: boolean;
   show_weekly: boolean;
@@ -337,6 +338,11 @@ export const api = {
   testOpenCodeAccount: (id: string) =>
     request<{ success: boolean; workspace_id?: string; error?: string }>(
       `/api/accounts/opencode/${id}/test`,
+      { method: "POST" }
+    ),
+  refreshOpenCodeKey: (id: string) =>
+    request<{ success: boolean; api_key_masked?: string; error?: string }>(
+      `/api/accounts/opencode/${id}/key/refresh`,
       { method: "POST" }
     ),
   openCodeQuota: (id: string) => request<QuotaAccount>(`/api/accounts/opencode/${id}/quota`),

@@ -51,6 +51,7 @@ def init_db() -> None:
                 workspace_id TEXT NOT NULL DEFAULT 'Default',
                 resolved_workspace_id TEXT,
                 auth_cookie TEXT NOT NULL,
+                api_key TEXT DEFAULT '',
                 show_rolling INTEGER NOT NULL DEFAULT 1,
                 show_weekly INTEGER NOT NULL DEFAULT 1,
                 show_monthly INTEGER NOT NULL DEFAULT 1,
@@ -124,6 +125,10 @@ def init_db() -> None:
             );
             """
         )
+        # Migrations for existing databases
+        columns = [r["name"] for r in conn.execute("PRAGMA table_info(opencode_accounts)").fetchall()]
+        if "api_key" not in columns:
+            conn.execute("ALTER TABLE opencode_accounts ADD COLUMN api_key TEXT DEFAULT ''")
 
 
 @dataclass
@@ -133,6 +138,7 @@ class OpenCodeAccountRow:
     workspace_id: str
     resolved_workspace_id: str | None
     auth_cookie: str
+    api_key: str
     show_rolling: bool
     show_weekly: bool
     show_monthly: bool
@@ -142,12 +148,17 @@ class OpenCodeAccountRow:
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> OpenCodeAccountRow:
+        try:
+            api_key = row["api_key"] or ""
+        except (KeyError, IndexError):
+            api_key = ""
         return cls(
             id=row["id"],
             name=row["name"],
             workspace_id=row["workspace_id"],
             resolved_workspace_id=row["resolved_workspace_id"],
             auth_cookie=row["auth_cookie"],
+            api_key=api_key,
             show_rolling=bool(row["show_rolling"]),
             show_weekly=bool(row["show_weekly"]),
             show_monthly=bool(row["show_monthly"]),
@@ -297,6 +308,7 @@ def create_opencode_account(
     name: str,
     workspace_id: str,
     auth_cookie: str,
+    api_key: str = "",
     show_rolling: bool = True,
     show_weekly: bool = True,
     show_monthly: bool = True,
@@ -308,15 +320,16 @@ def create_opencode_account(
         conn.execute(
             """
             INSERT INTO opencode_accounts (
-                id, name, workspace_id, resolved_workspace_id, auth_cookie,
+                id, name, workspace_id, resolved_workspace_id, auth_cookie, api_key,
                 show_rolling, show_weekly, show_monthly, enabled, created_at, updated_at
-            ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 account_id,
                 name,
                 workspace_id,
                 auth_cookie,
+                api_key,
                 int(show_rolling),
                 int(show_weekly),
                 int(show_monthly),
@@ -340,6 +353,7 @@ def update_opencode_account(account_id: str, **fields: Any) -> OpenCodeAccountRo
         "workspace_id",
         "resolved_workspace_id",
         "auth_cookie",
+        "api_key",
         "show_rolling",
         "show_weekly",
         "show_monthly",

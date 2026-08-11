@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const [username, setUsername] = useState("admin");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -47,7 +47,7 @@ export default function LoginPage() {
         <CardContent>
           <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
             <Input
-              placeholder="账号"
+              placeholder="账号（初始为 admin）"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoFocus

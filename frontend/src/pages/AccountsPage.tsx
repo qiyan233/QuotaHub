@@ -256,6 +256,11 @@ export default function AccountsPage() {
                         {account.resolved_workspace_id || account.workspace_id}
                       </p>
                       <p className="text-xs text-muted-foreground">{account.auth_cookie_masked}</p>
+                      {account.api_key_masked ? (
+                        <p className="font-mono text-xs text-amber-700">{account.api_key_masked}</p>
+                      ) : (
+                        <p className="text-xs text-slate-400">API Key 未获取</p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">

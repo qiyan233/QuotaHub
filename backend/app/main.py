@@ -22,6 +22,7 @@ from .bootstrap import ensure_bootstrapped
 from .analytics import build_overview
 from .config import load_config, load_service_config, mask_cookie, mask_ollama_cookie, update_service_config
 from .ollama_quota import fetch_all_ollama_quotas
+from .opencode_key import fetch_api_key, mask_api_key
 from .opencode_usage import resolve_account_workspace_id
 from .quota import fetch_all_quotas, fetch_quota_for_account
 from .referral import (
@@ -162,6 +163,7 @@ def _opencode_account_dict(row: db.OpenCodeAccountRow) -> dict[str, Any]:
         "workspace_id": row.workspace_id,
         "resolved_workspace_id": row.resolved_workspace_id,
         "auth_cookie_masked": mask_cookie(row.auth_cookie),
+        "api_key_masked": mask_api_key(row.api_key) if row.api_key else "",
         "configured": bool(row.auth_cookie.strip()),
         "show_rolling": row.show_rolling,
         "show_weekly": row.show_weekly,
@@ -222,15 +224,29 @@ async def list_opencode_accounts() -> list[dict[str, Any]]:
 async def create_opencode_account(body: OpenCodeAccountCreate) -> dict[str, Any]:
     if not body.auth_cookie.strip():
         raise HTTPException(status_code=400, detail="auth_cookie 不能为空")
+    api_key_masked = ""
+    workspace_id = body.workspace_id.strip() or "Default"
+    try:
+        resolved = await resolve_account_workspace_id(
+            workspace_id, body.auth_cookie.strip(), None
+        )
+        key = await fetch_api_key(resolved, body.auth_cookie.strip())
+        api_key_masked = mask_api_key(key)
+    except Exception:
+        api_key_masked = ""
     row = db.create_opencode_account(
         name=body.name.strip() or "OpenCode",
-        workspace_id=body.workspace_id.strip() or "Default",
+        workspace_id=workspace_id,
         auth_cookie=body.auth_cookie.strip(),
+        api_key=api_key_masked,
         show_rolling=body.show_rolling,
         show_weekly=body.show_weekly,
         show_monthly=body.show_monthly,
         enabled=body.enabled,
     )
+    if api_key_masked and row.resolved_workspace_id is None:
+        db.update_opencode_account(row.id, resolved_workspace_id=resolved)
+        row = db.get_opencode_account(row.id)
     return _opencode_account_dict(row)
 
 
@@ -252,6 +268,18 @@ async def update_opencode_account(account_id: str, body: OpenCodeAccountUpdate) 
         fields["resolved_workspace_id"] = None
     if "auth_cookie" in fields and fields["auth_cookie"] is not None:
         fields["auth_cookie"] = fields["auth_cookie"].strip()
+        # Re-fetch API key (masked only) when auth cookie changes.
+        try:
+            current = db.get_opencode_account(account_id)
+            ws = fields.get("resolved_workspace_id") or (
+                current.resolved_workspace_id if current else None
+            ) or fields.get("workspace_id") or (current.workspace_id if current else "Default")
+            resolved = await resolve_account_workspace_id(ws, fields["auth_cookie"], None)
+            key = await fetch_api_key(resolved, fields["auth_cookie"])
+            fields["api_key"] = mask_api_key(key)
+            fields["resolved_workspace_id"] = resolved
+        except Exception:
+            fields["api_key"] = ""
     row = db.update_opencode_account(account_id, **fields)
     if row is None:
         raise HTTPException(status_code=404, detail="账号不存在")
@@ -282,6 +310,27 @@ async def test_opencode_account(account_id: str) -> dict[str, Any]:
         return {"success": False, "error": str(exc)}
 
 
+@accounts_router.post("/opencode/{account_id}/key/refresh")
+async def refresh_opencode_api_key(account_id: str) -> dict[str, Any]:
+    row = db.get_opencode_account(account_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    try:
+        workspace_id = await resolve_account_workspace_id(
+            row.workspace_id,
+            row.auth_cookie,
+            row.resolved_workspace_id,
+        )
+        key = await fetch_api_key(workspace_id, row.auth_cookie)
+        masked = mask_api_key(key)
+        db.update_opencode_account(
+            account_id, api_key=masked, resolved_workspace_id=workspace_id
+        )
+        return {"success": True, "api_key_masked": masked}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
 @accounts_router.get("/opencode/{account_id}/quota")
 async def opencode_account_quota(account_id: str) -> dict[str, Any]:
     row = db.get_opencode_account(account_id)
@@ -299,7 +348,6 @@ async def opencode_account_quota(account_id: str) -> dict[str, Any]:
     )
     quota = await fetch_quota_for_account(account, 0)
     return quota.to_dict()
-
 
 @accounts_router.get("/opencode/{account_id}/referral")
 async def opencode_account_referral(account_id: str) -> dict[str, Any]:

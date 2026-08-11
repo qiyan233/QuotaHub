@@ -282,7 +282,7 @@ def _parse_reward_object(block: str) -> ReferralReward:
         source=_parse_string(_read_field_value(block, "source")),
         status=_parse_string(_read_field_value(block, "status")),
         email=_parse_string(_read_field_value(block, "email")),
-        amount=_parse_number(_read_field_value(block, "amount")) or 0.0,
+        amount=round((_parse_number(_read_field_value(block, "amount")) or 0.0) / 100.0, 2),
         time_created=_parse_nullable_string(_read_field_value(block, "timeCreated")),
         time_applied=_parse_nullable_string(_read_field_value(block, "timeApplied")),
     )
@@ -313,7 +313,7 @@ def parse_referral_summary(html: str) -> ReferralSummary:
     return ReferralSummary(
         referral_code=_parse_string(_read_field_value(block, "referralCode")),
         has_referral=_parse_bool(_read_field_value(block, "hasReferral")),
-        reward_amount=_parse_number(_read_field_value(block, "rewardAmount")) or 0.0,
+        reward_amount=round((_parse_number(_read_field_value(block, "rewardAmount")) or 0.0) / 100.0, 2),
         rewards=_parse_rewards(block),
     )
 

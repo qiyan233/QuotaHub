@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Coins, Gift, RefreshCw } from "lucide-react";
+import { ArrowLeft, Coins, Gift, KeyRound, RefreshCw } from "lucide-react";
 import { QuotaWindowRow, QuotaLoadingSkeleton } from "@/components/quota/QuotaCards";
 import { UsageTable } from "@/components/usage/UsageTable";
 import { applyOpenCodeCascade } from "@/lib/utils";
@@ -47,11 +47,33 @@ export default function AccountDetailPage() {
   const [referralError, setReferralError] = useState("");
   const [preview, setPreview] = useState<ReferralUsagePreview | null>(null);
   const [applyingId, setApplyingId] = useState<string | null>(null);
+  const [apiKeyMasked, setApiKeyMasked] = useState<string | null>(null);
+  const [keyLoading, setKeyLoading] = useState(false);
 
   const loadAccount = useCallback(async () => {
     if (!id) return;
     const accounts = await api.listOpenCodeAccounts();
-    setAccount(accounts.find((a) => a.id === id) || null);
+    const found = accounts.find((a) => a.id === id) || null;
+    setAccount(found);
+    setApiKeyMasked(found?.api_key_masked || null);
+  }, [id]);
+
+  const refreshKey = useCallback(async () => {
+    if (!id) return;
+    setKeyLoading(true);
+    setError("");
+    try {
+      const res = await api.refreshOpenCodeKey(id);
+      if (res.success && res.api_key_masked) {
+        setApiKeyMasked(res.api_key_masked);
+      } else {
+        setError(res.error || "获取 Key 失败");
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setKeyLoading(false);
+    }
   }, [id]);
 
   const refreshQuota = useCallback(async () => {
@@ -167,6 +189,28 @@ export default function AccountDetailPage() {
           {account.enabled ? "启用" : "停用"}
         </Badge>
       </div>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <KeyRound className="h-4 w-4 text-amber-600" />
+            API Key
+          </CardTitle>
+          <Button variant="outline" size="sm" onClick={() => void refreshKey()} disabled={keyLoading}>
+            <RefreshCw className={`h-4 w-4 ${keyLoading ? "animate-spin" : ""}`} />
+            {keyLoading ? "获取中…" : apiKeyMasked ? "重新获取" : "获取 Key"}
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {apiKeyMasked ? (
+            <p className="font-mono text-sm text-amber-700">{apiKeyMasked}</p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              未获取 API Key，点击右侧按钮从 OpenCode 抓取（仅显示掩码，不存储完整 Key）。
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       <Tabs>
         <TabsList>
