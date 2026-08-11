@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Pencil, Plus, Trash2, Waves } from "lucide-react";
+import { ExternalLink, Pencil, Plus, Trash2, Waves } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +9,11 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, type OllamaAccount, type OpenCodeAccount } from "@/lib/api";
 
 type Tab = "opencode" | "ollama";
+
+function buildWorkspaceLink(workspaceId: string): string {
+  const id = workspaceId.trim() || "Default";
+  return `https://opencode.ai/workspace/${encodeURIComponent(id)}/go`;
+}
 
 function OpenCodeForm({
   initial,
@@ -24,6 +29,8 @@ function OpenCodeForm({
   const [authCookie, setAuthCookie] = useState(initial?.auth_cookie || "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  const workspaceLink = buildWorkspaceLink(workspaceId);
 
   const submit = async () => {
     setSaving(true);
@@ -60,6 +67,20 @@ function OpenCodeForm({
           <Label htmlFor="oc-ws">工作区 ID / 名称</Label>
           <Input id="oc-ws" value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)} />
         </div>
+        {workspaceId.trim() && (
+          <div className="space-y-2">
+            <Label>工作区链接</Label>
+            <a
+              href={workspaceLink}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 break-all rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm text-cyan-800 hover:bg-cyan-100"
+            >
+              <ExternalLink className="h-4 w-4 shrink-0" />
+              <span className="font-mono">{workspaceLink}</span>
+            </a>
+          </div>
+        )}
         <div className="space-y-2">
           <Label htmlFor="oc-cookie">auth Cookie{initial?.id ? "（留空则不修改）" : ""}</Label>
           <Textarea
@@ -241,6 +262,15 @@ export default function AccountsPage() {
                     <Badge variant={account.enabled ? "success" : "warning"}>
                       {account.enabled ? "启用" : "停用"}
                     </Badge>
+                    <Button variant="outline" size="sm" asChild>
+                      <a
+                        href={buildWorkspaceLink(account.resolved_workspace_id || account.workspace_id)}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                      </a>
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"
