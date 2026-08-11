@@ -14,9 +14,10 @@ from typing import Any
 
 import httpx
 
-# Mirror of the repo owner — the release workflow pushes images/releases under
-# the lowercased owner, and the GitHub API is case-insensitive anyway.
-REPO = "qiyan233/QuotaHub"
+# Releases and Docker images are published on the upstream repo (this repo is
+# a fork; GitHub forks don't carry their own releases). Query the upstream so
+# the update check reflects where real releases are published.
+REPO = "lvmiao233/QuotaHub"
 RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 TIMEOUT = 8.0
 

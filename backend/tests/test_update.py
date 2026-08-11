@@ -11,6 +11,11 @@ def clear_version_env(monkeypatch):
     monkeypatch.delenv("QUOTAHUB_VERSION", raising=False)
 
 
+def test_repo_points_to_upstream():
+    # Releases are published on the upstream repo, not this fork.
+    assert upd.REPO == "lvmiao233/QuotaHub"
+
+
 def test_parse_version():
     assert upd.parse_version("0.2.0") == (0, 2, 0)
     assert upd.parse_version("v1.2.3") == (1, 2, 3)
