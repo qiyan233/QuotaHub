@@ -9,6 +9,7 @@ from urllib.parse import quote
 import httpx
 
 from .config import AccountConfig
+from .referral import parse_referral_summary
 
 DASHBOARD_BASE = "https://opencode.ai/workspace"
 WORKSPACE_SERVER_ID = "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f"
@@ -74,6 +75,9 @@ class QuotaAccount:
     updated_at: str
     windows: list[QuotaWindow]
     error: str = ""
+    has_referral: bool = False
+    referral_reward_amount: float = 0.0
+    referral_code: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -83,6 +87,11 @@ class QuotaAccount:
             "success": self.success,
             "updated_at": self.updated_at,
         }
+        if self.has_referral:
+            payload["has_referral"] = True
+            payload["referral_reward_amount"] = self.referral_reward_amount
+            if self.referral_code:
+                payload["referral_code"] = self.referral_code
         if self.error:
             payload["error"] = self.error
         if self.windows:
@@ -271,9 +280,24 @@ async def fetch_quota_for_account(account: AccountConfig, index: int) -> QuotaAc
             if resp.status_code < 200 or resp.status_code >= 300:
                 raise ValueError(f"Dashboard 返回 HTTP {resp.status_code}")
 
-            windows = parse_quota_html(resp.text[:MAX_HTML_BYTES], now)
+            html = resp.text[:MAX_HTML_BYTES]
+            windows = parse_quota_html(html, now)
             if not windows:
                 raise ValueError("无法从 Dashboard HTML 解析额度数据")
+
+            # Reuse the already-fetched HTML to also surface referral (bonus)
+            # amounts — the same /go page carries both quota and referral data.
+            has_referral = False
+            referral_reward_amount = 0.0
+            referral_code = ""
+            try:
+                summary = parse_referral_summary(html)
+                has_referral = summary.has_referral
+                referral_reward_amount = summary.reward_amount
+                referral_code = summary.referral_code or ""
+            except Exception:
+                # Referral parsing is best-effort; quota must not be blocked.
+                pass
 
             return QuotaAccount(
                 index=index,
@@ -282,6 +306,9 @@ async def fetch_quota_for_account(account: AccountConfig, index: int) -> QuotaAc
                 success=True,
                 updated_at=updated_at,
                 windows=filter_windows(windows, account),
+                has_referral=has_referral,
+                referral_reward_amount=referral_reward_amount,
+                referral_code=referral_code,
             )
     except Exception as exc:
         return QuotaAccount(

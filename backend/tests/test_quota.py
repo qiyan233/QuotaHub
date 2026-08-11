@@ -1,7 +1,12 @@
+import asyncio
 from datetime import UTC, datetime
 
+import httpx
+from httpx import Response
+
+from app.config import AccountConfig
 from app.opencode_usage import parse_usage_response
-from app.quota import build_cookie_header, parse_quota_html
+from app.quota import build_cookie_header, fetch_quota_for_account, parse_quota_html
 
 
 SAMPLE_USAGE_RESPONSE = """
@@ -33,6 +38,71 @@ def test_parse_quota_html():
     assert windows[0].used == 12.5
     assert windows[1].used == 40
     assert windows[2].used == 75.2
+
+
+def _sample_dashboard_html() -> str:
+    return """
+    rollingUsage: $R[0] = { usagePercent: 12.5, resetInSec: 3600 }
+    weeklyUsage: $R[0] = { usagePercent: 40, resetInSec: 86400 }
+    monthlyUsage: $R[0] = { usagePercent: 75.2, resetInSec: 1209600 }
+
+    someObject = { id: "obj_1", referralCode: "QH-ABC123", hasReferral: true,
+      rewardAmount: 500, rewards: [ { id:"rw_1", source:"referral", status:"available",
+      email:"a@b.com", amount:500, timeCreated:"2026-07-01T00:00:00Z" } ] }
+    """
+
+
+def test_fetch_quota_includes_referral_bonus_async(monkeypatch):
+    """Dashboard fetch reuses the page to also surface referral bonus amounts."""
+    import asyncio
+
+    from app import quota as quota_module
+
+    html = _sample_dashboard_html()
+
+    async def fake_get(self, url, **kwargs):
+        return Response(200, text=html, headers={"content-type": "text/html"})
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    async def run():
+        account = AccountConfig(
+            name="Test",
+            workspace_id="wrk_01TEST",
+            auth_cookie="auth=cookie",
+        )
+        return await fetch_quota_for_account(account, 0)
+
+    result = asyncio.run(run())
+    assert result.success is True
+    assert len(result.windows) == 3
+    assert result.has_referral is True
+    assert result.referral_reward_amount == 5.0  # 500 cents -> 5.00
+    assert result.referral_code == "QH-ABC123"
+
+
+def test_fetch_quota_survives_referral_parse_failure(monkeypatch):
+    """If the referral block is missing, quota still resolves."""
+    import asyncio
+
+    html = """
+    rollingUsage: $R[0] = { usagePercent: 12.5, resetInSec: 3600 }
+    weeklyUsage: $R[0] = { usagePercent: 40, resetInSec: 86400 }
+    """
+
+    async def fake_get(self, url, **kwargs):
+        return Response(200, text=html, headers={"content-type": "text/html"})
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    account = AccountConfig(
+        name="Test",
+        workspace_id="wrk_01TEST",
+        auth_cookie="auth=cookie",
+    )
+    result = asyncio.run(fetch_quota_for_account(account, 0))
+    assert result.success is True
+    assert result.has_referral is False
 
 
 def test_parse_usage_response():

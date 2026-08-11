@@ -80,6 +80,9 @@ export interface QuotaAccount {
   updated_at: string;
   windows?: QuotaWindow[];
   error?: string;
+  has_referral?: boolean;
+  referral_reward_amount?: number;
+  referral_code?: string;
 }
 
 export interface OllamaQuotaAccount {

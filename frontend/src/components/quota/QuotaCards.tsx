@@ -1,3 +1,4 @@
+import { Gift } from "lucide-react";
 import type { OllamaModelUsage, QuotaAccount, QuotaWindow } from "@/lib/api";
 import {
   applyOpenCodeCascade,
@@ -198,9 +199,17 @@ export function OpenGoAccountCard({
               {account.workspace_id || "—"}
             </CardDescription>
           </div>
-          <Badge variant={loading ? "default" : account.success ? "success" : "danger"}>
-            {loading ? "加载中" : account.success ? "正常" : "异常"}
-          </Badge>
+          <div className="flex flex-col items-end gap-1.5">
+            {!loading && account.has_referral && (
+              <Badge variant="warning" className="gap-1">
+                <Gift className="h-3 w-3" />
+                赠金 ${(account.referral_reward_amount ?? 0).toFixed(2)}
+              </Badge>
+            )}
+            <Badge variant={loading ? "default" : account.success ? "success" : "danger"}>
+              {loading ? "加载中" : account.success ? "正常" : "异常"}
+            </Badge>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
