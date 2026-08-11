@@ -78,7 +78,43 @@ def test_fetch_quota_includes_referral_bonus_async(monkeypatch):
     assert len(result.windows) == 3
     assert result.has_referral is True
     assert result.referral_reward_amount == 5.0  # 500 cents -> 5.00
+    assert result.referral_available_amount == 5.0  # one available reward
     assert result.referral_code == "QH-ABC123"
+
+
+def _dashboard_with_rewards(rewards_block: str) -> str:
+    return f"""
+    rollingUsage: $R[0] = {{ usagePercent: 12.5, resetInSec: 3600 }}
+    weeklyUsage: $R[0] = {{ usagePercent: 40, resetInSec: 86400 }}
+
+    someObject = {{ id: "obj_1", referralCode: "QH-ABC123", hasReferral: true,
+      rewardAmount: 500, rewards: [ {rewards_block} ] }}
+    """
+
+
+def test_fetch_quota_zero_available_when_all_claimed(monkeypatch):
+    """赠金已全部领取时，可领取金额应为 0（卡片不再显示）。"""
+    import asyncio
+
+    html = _dashboard_with_rewards(
+        '{ id:"rw_1", source:"referral", status:"applied", email:"a@b.com", amount:500, '
+        'timeCreated:"2026-07-01T00:00:00Z" }'
+    )
+
+    async def fake_get(self, url, **kwargs):
+        return Response(200, text=html, headers={"content-type": "text/html"})
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    account = AccountConfig(
+        name="Test",
+        workspace_id="wrk_01TEST",
+        auth_cookie="auth=cookie",
+    )
+    result = asyncio.run(fetch_quota_for_account(account, 0))
+    assert result.has_referral is True
+    assert result.referral_reward_amount == 5.0  # 历史总额仍在
+    assert result.referral_available_amount == 0.0  # 但无可用 -> 不显示徽章
 
 
 def test_fetch_quota_survives_referral_parse_failure(monkeypatch):
@@ -103,6 +139,7 @@ def test_fetch_quota_survives_referral_parse_failure(monkeypatch):
     result = asyncio.run(fetch_quota_for_account(account, 0))
     assert result.success is True
     assert result.has_referral is False
+    assert result.referral_available_amount == 0.0
 
 
 def test_parse_usage_response():

@@ -82,6 +82,7 @@ export interface QuotaAccount {
   error?: string;
   has_referral?: boolean;
   referral_reward_amount?: number;
+  referral_available_amount?: number;
   referral_code?: string;
 }
 

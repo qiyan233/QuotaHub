@@ -200,10 +200,10 @@ export function OpenGoAccountCard({
             </CardDescription>
           </div>
           <div className="flex flex-col items-end gap-1.5">
-            {!loading && account.has_referral && (
+            {!loading && (account.referral_available_amount ?? 0) > 0 && (
               <Badge variant="warning" className="gap-1">
                 <Gift className="h-3 w-3" />
-                赠金 ${(account.referral_reward_amount ?? 0).toFixed(2)}
+                赠金 ${(account.referral_available_amount ?? 0).toFixed(2)}
               </Badge>
             )}
             <Badge variant={loading ? "default" : account.success ? "success" : "danger"}>

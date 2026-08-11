@@ -77,6 +77,7 @@ class QuotaAccount:
     error: str = ""
     has_referral: bool = False
     referral_reward_amount: float = 0.0
+    referral_available_amount: float = 0.0
     referral_code: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -90,6 +91,7 @@ class QuotaAccount:
         if self.has_referral:
             payload["has_referral"] = True
             payload["referral_reward_amount"] = self.referral_reward_amount
+            payload["referral_available_amount"] = self.referral_available_amount
             if self.referral_code:
                 payload["referral_code"] = self.referral_code
         if self.error:
@@ -289,11 +291,15 @@ async def fetch_quota_for_account(account: AccountConfig, index: int) -> QuotaAc
             # amounts — the same /go page carries both quota and referral data.
             has_referral = False
             referral_reward_amount = 0.0
+            referral_available_amount = 0.0
             referral_code = ""
             try:
                 summary = parse_referral_summary(html)
                 has_referral = summary.has_referral
                 referral_reward_amount = summary.reward_amount
+                referral_available_amount = sum(
+                    reward.amount for reward in summary.rewards if reward.status == "available"
+                )
                 referral_code = summary.referral_code or ""
             except Exception:
                 # Referral parsing is best-effort; quota must not be blocked.
@@ -308,6 +314,7 @@ async def fetch_quota_for_account(account: AccountConfig, index: int) -> QuotaAc
                 windows=filter_windows(windows, account),
                 has_referral=has_referral,
                 referral_reward_amount=referral_reward_amount,
+                referral_available_amount=referral_available_amount,
                 referral_code=referral_code,
             )
     except Exception as exc:
