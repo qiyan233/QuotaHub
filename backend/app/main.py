@@ -6,16 +6,21 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from . import db
 from .auth import (
     change_credentials,
-    create_token,
+    create_session_token,
+    current_username,
     is_auth_enabled,
+    is_secure_request,
+    new_csrf_token,
+    password_was_changed,
     require_auth,
+    revoke_current_session,
     verify_credentials,
 )
 from .bootstrap import ensure_bootstrapped
@@ -92,13 +97,43 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="QuotaHub", version="0.2.0", lifespan=lifespan)
 
+# CORS is scoped to local dev origins only. The production deployment serves the
+# SPA from the same origin (FastAPI static fallback), so cross-origin access is
+# not required — and wildcard origins would let any site issue credentialed
+# requests. Vite dev server proxies /api on the same origin too.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    """Add hardened security response headers on every response."""
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault("X-XSS-Protection", "0")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self'; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'; "
+        "form-action 'self'",
+    )
+    if is_secure_request(request):
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 accounts_router = APIRouter(prefix="/api/accounts", tags=["accounts"], dependencies=[Depends(require_auth)])
 
@@ -110,13 +145,16 @@ async def login(request: Request, body: dict[str, str]) -> dict:
     username = (body.get("username") or "").strip() or db.DEFAULT_USERNAME
     password = (body.get("password") or "").strip()
     if not is_auth_enabled():
-        return {"token": None, "enabled": False}
+        return {"enabled": False}
 
-    # Resolve real client IP (nginx sets X-Forwarded-For)
-    ip = request.client.host if request.client else "unknown"
+    # Resolve real client IP (nginx sets X-Forwarded-For). Only the last
+    # trusted hop is honored: if we are directly reachable (no proxy), take
+    # request.client.host and ignore any X-Forwarded-For the client supplies.
     forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        ip = forwarded.split(",")[0].strip() or ip
+    if forwarded and request.headers.get("x-forwarded-host"):
+        ip = forwarded.split(",")[-1].strip() or request.client.host
+    else:
+        ip = request.client.host if request.client else "unknown"
 
     now = _time.time()
     locked, locked_until = db.is_login_locked(ip, now)
@@ -138,15 +176,84 @@ async def login(request: Request, body: dict[str, str]) -> dict:
         raise HTTPException(status_code=401, detail="账号或密码错误")
 
     db.reset_login_attempt(ip)
-    return {"token": create_token(), "enabled": True, "username": username}
+
+    secure = is_secure_request(request)
+    session_token = create_session_token(username)
+    csrf_token = new_csrf_token()
+
+    response = JSONResponse(
+        {
+            "enabled": True,
+            "username": username,
+            "must_change_password": not password_was_changed(username),
+        }
+    )
+    response.set_cookie(
+        "qh_session",
+        session_token,
+        max_age=db.SESSION_TTL_SEC,
+        path="/",
+        secure=secure,
+        httponly=True,
+        samesite="lax",
+    )
+    response.set_cookie(
+        "qh_csrf",
+        csrf_token,
+        max_age=db.SESSION_TTL_SEC,
+        path="/",
+        secure=secure,
+        httponly=False,
+        samesite="lax",
+    )
+    # The CSRF token is also returned in the body so the SPA can attach it to
+    # mutating requests without reading the cookie via JS.
+    response.headers["X-CSRF-Token"] = csrf_token
+    return response
+
+
+@app.post("/api/auth/logout", dependencies=[Depends(require_auth)])
+async def logout(request: Request) -> dict:
+    from .auth import current_session_hash
+
+    token_hash = current_session_hash(request)
+    if token_hash:
+        revoke_current_session(token_hash)
+    response = JSONResponse({"ok": True})
+    response.delete_cookie("qh_session", path="/", secure=is_secure_request(request), samesite="lax", httponly=True)
+    response.delete_cookie("qh_csrf", path="/", secure=is_secure_request(request), samesite="lax")
+    return response
+
+
+@app.get("/api/auth/session")
+async def session_status(request: Request) -> dict:
+    username = current_username(request)
+    if not username:
+        return {"authenticated": False}
+    return {
+        "authenticated": True,
+        "username": username,
+        "must_change_password": not password_was_changed(username),
+    }
 
 
 @app.post("/api/auth/change-credentials", dependencies=[Depends(require_auth)])
-async def change_credentials_endpoint(body: dict[str, str]) -> dict:
+async def change_credentials_endpoint(request: Request, body: dict[str, str]) -> dict:
+    from .auth import current_session_hash, mark_password_changed
+
+    current_password = (body.get("current_password") or "").strip()
     new_username = (body.get("username") or "").strip() or db.DEFAULT_USERNAME
     new_password = (body.get("password") or "").strip()
     if len(new_password) < 6:
         raise HTTPException(status_code=400, detail="密码长度至少 6 位")
+
+    username = current_username(request)
+    # Require the current password, except on the forced first-login change
+    # (the initial credential was set out-of-band by the operator).
+    if password_was_changed(username or ""):
+        if not current_password or not verify_credentials(username or "", current_password):
+            raise HTTPException(status_code=403, detail="当前密码不正确")
+
     change_credentials(new_username, new_password)
     return {"ok": True, "username": new_username}
 

@@ -2,6 +2,9 @@
 config.json
 docker-compose.yml
 
+# 运行时数据目录（SQLite、加密密钥 secret.key 等，勿提交）
+data/
+
 # 环境变量
 .env
 .env.*

@@ -1,4 +1,5 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { QuotaProvider } from "@/contexts/QuotaContext";
 import { AppLayout } from "@/layouts/AppLayout";
 import AccountDetailPage from "@/pages/AccountDetailPage";
@@ -8,11 +9,44 @@ import DashboardPage from "@/pages/DashboardPage";
 import LoginPage from "@/pages/LoginPage";
 import OverviewPage from "@/pages/OverviewPage";
 import SettingsPage from "@/pages/SettingsPage";
-import { getToken } from "@/lib/api";
+import { api, type SessionResponse } from "@/lib/api";
+
+type AuthState =
+  | { status: "loading" }
+  | { status: "anonymous" }
+  | { status: "authenticated"; session: SessionResponse };
 
 function RequireAuth({ children }: { children: React.ReactElement }) {
-  if (!getToken()) {
+  const location = useLocation();
+  const [auth, setAuth] = useState<AuthState>({ status: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const session = await api.session();
+        if (cancelled) return;
+        setAuth(session.authenticated ? { status: "authenticated", session } : { status: "anonymous" });
+      } catch {
+        if (!cancelled) setAuth({ status: "anonymous" });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [location.pathname]);
+
+  if (auth.status === "loading") {
+    return <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">加载中…</div>;
+  }
+  if (auth.status === "anonymous") {
     return <Navigate to="/login" replace />;
+  }
+
+  // First login uses the default credential — force a password change before
+  // the panel can be used (except on the change-password page itself).
+  if (auth.session.must_change_password && location.pathname !== "/settings") {
+    return <Navigate to="/settings?force=1" replace />;
   }
   return children;
 }

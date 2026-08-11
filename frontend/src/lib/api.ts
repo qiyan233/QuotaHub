@@ -236,29 +236,43 @@ export interface ReferralUsagePreview {
   error?: string;
 }
 
-const TOKEN_KEY = "quotahub_token";
+let csrfToken: string | null = null;
 
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
+/**
+ * CSRF protection relies on a server-issued token that the SPA reads from the
+ * login response and echoes back on state-changing requests. The session
+ * itself lives in an HttpOnly cookie and is never exposed to JS.
+ */
+function getCsrfToken(): string | null {
+  return csrfToken;
 }
 
-export function setToken(token: string | null): void {
-  if (token) {
-    localStorage.setItem(TOKEN_KEY, token);
-  } else {
-    localStorage.removeItem(TOKEN_KEY);
-  }
+function setCsrfToken(token: string | null): void {
+  csrfToken = token;
 }
+
+const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getToken();
   const headers = new Headers(init?.headers);
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
+  // Same-origin cookies (session) travel automatically; we never set an
+  // Authorization header.
+  const cfg: RequestInit = {
+    ...init,
+    credentials: "include",
+    headers,
+  };
+  // Attach CSRF token to state-changing requests.
+  if (init?.method && MUTATING.has(init.method)) {
+    const csrf = getCsrfToken();
+    if (csrf) headers.set("X-CSRF-Token", csrf);
   }
-  const resp = await fetch(path, { ...init, headers });
+  const resp = await fetch(path, cfg);
+  // Capture a fresh CSRF token if the server rotated it (login/logout).
+  const respCsrf = resp.headers.get("X-CSRF-Token");
+  if (respCsrf) setCsrfToken(respCsrf);
   if (resp.status === 401 && !path.startsWith("/api/auth/login")) {
-    setToken(null);
+    setCsrfToken(null);
     if (!window.location.pathname.startsWith("/login")) {
       window.location.href = "/login";
     }
@@ -279,18 +293,40 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return resp.json() as Promise<T>;
 }
 
+export interface LoginResponse {
+  enabled: boolean;
+  username?: string;
+  must_change_password?: boolean;
+}
+
+export interface SessionResponse {
+  authenticated: boolean;
+  username?: string;
+  must_change_password?: boolean;
+}
+
 export const api = {
   login: (username: string, password: string) =>
-    request<{ token: string | null; enabled: boolean; username?: string }>("/api/auth/login", {
+    request<LoginResponse>("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     }),
-  changeCredentials: (username: string, password: string) =>
+  logout: () =>
+    request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }).then((res) => {
+      setCsrfToken(null);
+      return res;
+    }),
+  session: () => request<SessionResponse>("/api/auth/session"),
+  changeCredentials: (username: string, password: string, currentPassword?: string) =>
     request<{ ok: boolean; username: string }>("/api/auth/change-credentials", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({
+        username,
+        password,
+        ...(currentPassword ? { current_password: currentPassword } : {}),
+      }),
     }),
   authEnabled: () =>
     request<{ enabled: boolean }>("/api/auth/status").catch(() => ({ enabled: true })),

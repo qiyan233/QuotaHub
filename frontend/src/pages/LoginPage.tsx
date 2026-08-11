@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { KeyRound } from "lucide-react";
-import { api, setToken } from "@/lib/api";
+import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,9 +19,12 @@ export default function LoginPage() {
     setError("");
     try {
       const res = await api.login(username, password);
-      if (res.token) {
-        setToken(res.token);
-        navigate("/", { replace: true });
+      if (res.enabled) {
+        if (res.must_change_password) {
+          navigate("/settings?force=1", { replace: true });
+        } else {
+          navigate("/", { replace: true });
+        }
       } else {
         setError("未启用面板密码");
       }
@@ -47,7 +50,7 @@ export default function LoginPage() {
         <CardContent>
           <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
             <Input
-              placeholder="账号（初始为 admin）"
+              placeholder="账号"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoFocus

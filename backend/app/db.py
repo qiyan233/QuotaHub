@@ -5,11 +5,12 @@ import sqlite3
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
 
 from .config import data_dir
+from .secrets import decrypt_secret, encrypt_secret
 
 
 def _now_iso() -> str:
@@ -56,6 +57,7 @@ def init_db() -> None:
                 show_weekly INTEGER NOT NULL DEFAULT 1,
                 show_monthly INTEGER NOT NULL DEFAULT 1,
                 enabled INTEGER NOT NULL DEFAULT 1,
+                encrypted INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -67,6 +69,7 @@ def init_db() -> None:
                 show_session INTEGER NOT NULL DEFAULT 1,
                 show_weekly INTEGER NOT NULL DEFAULT 1,
                 enabled INTEGER NOT NULL DEFAULT 1,
+                encrypted INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -121,14 +124,31 @@ def init_db() -> None:
                 username TEXT PRIMARY KEY,
                 password_hash TEXT NOT NULL,
                 salt TEXT NOT NULL,
+                password_changed INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                token_hash TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                revoked INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_auth_sessions_username
+                ON auth_sessions(username);
             """
         )
         # Migrations for existing databases
-        columns = [r["name"] for r in conn.execute("PRAGMA table_info(opencode_accounts)").fetchall()]
-        if "api_key" not in columns:
+        oc_columns = [r["name"] for r in conn.execute("PRAGMA table_info(opencode_accounts)").fetchall()]
+        if "api_key" not in oc_columns:
             conn.execute("ALTER TABLE opencode_accounts ADD COLUMN api_key TEXT DEFAULT ''")
+        if "encrypted" not in oc_columns:
+            conn.execute("ALTER TABLE opencode_accounts ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0")
+        ol_columns = [r["name"] for r in conn.execute("PRAGMA table_info(ollama_accounts)").fetchall()]
+        if "encrypted" not in ol_columns:
+            conn.execute("ALTER TABLE ollama_accounts ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0")
 
 
 @dataclass
@@ -145,6 +165,7 @@ class OpenCodeAccountRow:
     enabled: bool
     created_at: str
     updated_at: str
+    encrypted: bool = False
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> OpenCodeAccountRow:
@@ -152,19 +173,24 @@ class OpenCodeAccountRow:
             api_key = row["api_key"] or ""
         except (KeyError, IndexError):
             api_key = ""
+        try:
+            encrypted = bool(row["encrypted"])
+        except (KeyError, IndexError):
+            encrypted = False
         return cls(
             id=row["id"],
             name=row["name"],
             workspace_id=row["workspace_id"],
             resolved_workspace_id=row["resolved_workspace_id"],
-            auth_cookie=row["auth_cookie"],
-            api_key=api_key,
+            auth_cookie=decrypt_secret(row["auth_cookie"]),
+            api_key=decrypt_secret(api_key),
             show_rolling=bool(row["show_rolling"]),
             show_weekly=bool(row["show_weekly"]),
             show_monthly=bool(row["show_monthly"]),
             enabled=bool(row["enabled"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            encrypted=encrypted,
         )
 
 
@@ -178,18 +204,24 @@ class OllamaAccountRow:
     enabled: bool
     created_at: str
     updated_at: str
+    encrypted: bool = False
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> OllamaAccountRow:
+        try:
+            encrypted = bool(row["encrypted"])
+        except (KeyError, IndexError):
+            encrypted = False
         return cls(
             id=row["id"],
             name=row["name"],
-            session_cookie=row["session_cookie"],
+            session_cookie=decrypt_secret(row["session_cookie"]),
             show_session=bool(row["show_session"]),
             show_weekly=bool(row["show_weekly"]),
             enabled=bool(row["enabled"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            encrypted=encrypted,
         )
 
 
@@ -316,24 +348,27 @@ def create_opencode_account(
 ) -> OpenCodeAccountRow:
     account_id = str(uuid.uuid4())
     now = _now_iso()
+    enc_cookie = encrypt_secret(auth_cookie)
+    enc_api_key = encrypt_secret(api_key)
     with get_conn() as conn:
         conn.execute(
             """
             INSERT INTO opencode_accounts (
                 id, name, workspace_id, resolved_workspace_id, auth_cookie, api_key,
-                show_rolling, show_weekly, show_monthly, enabled, created_at, updated_at
-            ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+                show_rolling, show_weekly, show_monthly, enabled, encrypted, created_at, updated_at
+            ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 account_id,
                 name,
                 workspace_id,
-                auth_cookie,
-                api_key,
+                enc_cookie,
+                enc_api_key,
                 int(show_rolling),
                 int(show_weekly),
                 int(show_monthly),
                 int(enabled),
+                1,
                 now,
                 now,
             ),
@@ -366,6 +401,8 @@ def update_opencode_account(account_id: str, **fields: Any) -> OpenCodeAccountRo
             continue
         if key in {"show_rolling", "show_weekly", "show_monthly", "enabled"}:
             value = int(bool(value))
+        if key in {"auth_cookie", "api_key"}:
+            value = encrypt_secret(value)
         updates.append(f"{key} = ?")
         values.append(value)
     if not updates:
@@ -375,7 +412,7 @@ def update_opencode_account(account_id: str, **fields: Any) -> OpenCodeAccountRo
     values.append(account_id)
     with get_conn() as conn:
         cur = conn.execute(
-            f"UPDATE opencode_accounts SET {', '.join(updates)} WHERE id = ?",
+            f"UPDATE opencode_accounts SET {', '.join(updates)}, encrypted = 1 WHERE id = ?",
             values,
         )
         if cur.rowcount == 0:
@@ -417,20 +454,22 @@ def create_ollama_account(
 ) -> OllamaAccountRow:
     account_id = str(uuid.uuid4())
     now = _now_iso()
+    enc_cookie = encrypt_secret(session_cookie)
     with get_conn() as conn:
         conn.execute(
             """
             INSERT INTO ollama_accounts (
-                id, name, session_cookie, show_session, show_weekly, enabled, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                id, name, session_cookie, show_session, show_weekly, enabled, encrypted, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 account_id,
                 name,
-                session_cookie,
+                enc_cookie,
                 int(show_session),
                 int(show_weekly),
                 int(enabled),
+                1,
                 now,
                 now,
             ),
@@ -449,6 +488,8 @@ def update_ollama_account(account_id: str, **fields: Any) -> OllamaAccountRow | 
             continue
         if key in {"show_session", "show_weekly", "enabled"}:
             value = int(bool(value))
+        if key == "session_cookie":
+            value = encrypt_secret(value)
         updates.append(f"{key} = ?")
         values.append(value)
     if not updates:
@@ -458,7 +499,7 @@ def update_ollama_account(account_id: str, **fields: Any) -> OllamaAccountRow | 
     values.append(account_id)
     with get_conn() as conn:
         cur = conn.execute(
-            f"UPDATE ollama_accounts SET {', '.join(updates)} WHERE id = ?",
+            f"UPDATE ollama_accounts SET {', '.join(updates)}, encrypted = 1 WHERE id = ?",
             values,
         )
         if cur.rowcount == 0:
@@ -871,7 +912,7 @@ DEFAULT_USERNAME = "admin"
 def get_panel_user(username: str) -> dict[str, Any] | None:
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT username, password_hash, salt FROM panel_users WHERE username = ?",
+            "SELECT username, password_hash, salt, password_changed FROM panel_users WHERE username = ?",
             (username,),
         ).fetchone()
     if row is None:
@@ -880,21 +921,36 @@ def get_panel_user(username: str) -> dict[str, Any] | None:
         "username": row["username"],
         "password_hash": row["password_hash"],
         "salt": row["salt"],
+        "password_changed": bool(row["password_changed"]),
     }
 
 
-def upsert_panel_user(username: str, password_hash: str, salt: str) -> None:
+def upsert_panel_user(
+    username: str,
+    password_hash: str,
+    salt: str,
+    password_changed: bool = True,
+) -> None:
     with get_conn() as conn:
         conn.execute(
             """
-            INSERT INTO panel_users (username, password_hash, salt, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO panel_users (username, password_hash, salt, password_changed, updated_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(username) DO UPDATE SET
                 password_hash = excluded.password_hash,
                 salt = excluded.salt,
+                password_changed = excluded.password_changed,
                 updated_at = excluded.updated_at
             """,
-            (username, password_hash, salt, _now_iso()),
+            (username, password_hash, salt, int(password_changed), _now_iso()),
+        )
+
+
+def set_panel_user_password_changed(username: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE panel_users SET password_changed = 1, updated_at = ? WHERE username = ?",
+            (_now_iso(), username),
         )
 
 
@@ -907,3 +963,66 @@ def list_panel_users() -> list[str]:
 def delete_panel_user(username: str) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM panel_users WHERE username = ?", (username,))
+
+
+# ---- Auth sessions (persisted so tokens survive restart and can be revoked) ----
+
+SESSION_TTL_SEC = 7 * 24 * 3600  # 7 days
+
+
+def create_session(token_hash: str, username: str) -> str:
+    now = datetime.now(UTC)
+    expires_at = (now + timedelta(seconds=SESSION_TTL_SEC)).isoformat().replace("+00:00", "Z")
+    created = now.isoformat().replace("+00:00", "Z")
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO auth_sessions (token_hash, username, created_at, expires_at, revoked)
+            VALUES (?, ?, ?, ?, 0)
+            """,
+            (token_hash, username, created, expires_at),
+        )
+    return expires_at
+
+
+def get_valid_session(token_hash: str, now_iso: str) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT token_hash, username, expires_at, revoked
+            FROM auth_sessions WHERE token_hash = ?
+            """,
+            (token_hash,),
+        ).fetchone()
+    if row is None:
+        return None
+    if row["revoked"]:
+        return None
+    if row["expires_at"] <= now_iso:
+        return None
+    return {
+        "token_hash": row["token_hash"],
+        "username": row["username"],
+        "expires_at": row["expires_at"],
+    }
+
+
+def revoke_session(token_hash: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE auth_sessions SET revoked = 1 WHERE token_hash = ?",
+            (token_hash,),
+        )
+
+
+def revoke_all_sessions(username: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE auth_sessions SET revoked = 1 WHERE username = ?",
+            (username,),
+        )
+
+
+def purge_expired_sessions() -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM auth_sessions WHERE expires_at <= ?", (_now_iso(),))

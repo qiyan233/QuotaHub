@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuota } from "@/contexts/QuotaContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api, type AppConfigResponse, type RefreshSettings, type UsageSyncSettings } from "@/lib/api";
 import { showToast } from "@/lib/toast";
-import { setToken } from "@/lib/api";
 
 function ToggleRow({
   label,
@@ -65,8 +64,11 @@ function settingsSnapshot(
 export default function SettingsPage() {
   const { reloadRefreshConfig } = useQuota();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const forced = searchParams.get("force") === "1";
   const [credUsername, setCredUsername] = useState("");
   const [credPassword, setCredPassword] = useState("");
+  const [credCurrent, setCredCurrent] = useState("");
   const [credSaving, setCredSaving] = useState(false);
   const [config, setConfig] = useState<AppConfigResponse | null>(null);
   const [refreshOllama, setRefreshOllama] = useState<RefreshSettings>({ auto_refresh: true, interval_sec: 300 });
@@ -235,6 +237,14 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      {forced && (
+        <Card className="border-amber-300 bg-amber-50">
+          <CardContent className="py-3 text-sm text-amber-800">
+            首次登录：请先修改初始账号与密码，修改后需重新登录。
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">修改登录账号</CardTitle>
@@ -245,9 +255,19 @@ export default function SettingsPage() {
           </p>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1 text-sm">
+              <span className="text-muted-foreground">当前密码</span>
+              <Input
+                type="password"
+                placeholder={forced ? "首次修改无需填写" : "当前密码"}
+                value={credCurrent}
+                disabled={forced}
+                onChange={(e) => setCredCurrent(e.target.value)}
+              />
+            </label>
+            <label className="space-y-1 text-sm">
               <span className="text-muted-foreground">新账号</span>
               <Input
-                placeholder="默认 admin"
+                placeholder="账号名"
                 value={credUsername}
                 onChange={(e) => setCredUsername(e.target.value)}
               />
@@ -267,9 +287,12 @@ export default function SettingsPage() {
             onClick={async () => {
               setCredSaving(true);
               try {
-                const res = await api.changeCredentials(credUsername || "admin", credPassword);
+                const res = await api.changeCredentials(
+                  credUsername || "admin",
+                  credPassword,
+                  forced ? undefined : credCurrent
+                );
                 showToast(`账号已更新为 ${res.username}`);
-                setToken(null);
                 navigate("/login", { replace: true });
               } catch (e) {
                 showToast((e as Error).message, "error");

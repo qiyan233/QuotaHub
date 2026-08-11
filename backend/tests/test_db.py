@@ -47,6 +47,9 @@ def test_insert_usage_records_ignore(temp_data_dir):
 
 
 def test_list_all_usage_records_and_daily_stats(temp_data_dir):
+    from datetime import UTC, datetime
+
+    today = datetime.now(UTC).date().isoformat()
     account_a = db.create_opencode_account(
         name="Alpha",
         workspace_id="Default",
@@ -63,7 +66,7 @@ def test_list_all_usage_records_and_daily_stats(temp_data_dir):
         [
             {
                 "usg_id": "usg_a1",
-                "created_at": "2026-07-09T10:00:00.000Z",
+                "created_at": f"{today}T10:00:00.000Z",
                 "model": "glm-5.2",
                 "provider": "p",
                 "input_tokens": 1,
@@ -81,7 +84,7 @@ def test_list_all_usage_records_and_daily_stats(temp_data_dir):
         [
             {
                 "usg_id": "usg_b1",
-                "created_at": "2026-07-09T12:00:00.000Z",
+                "created_at": f"{today}T12:00:00.000Z",
                 "model": "gpt",
                 "provider": "p",
                 "input_tokens": 2,
