@@ -317,7 +317,7 @@ export default function AccountDetailPage() {
                 <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
                   {referral.error || "获取赠金信息失败"}
                 </div>
-              ) : referral?.has_referral === false && !referral?.referral_code ? (
+              ) : !referral?.rewards?.length ? (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-muted-foreground">
                   该账号暂无赠金。
                 </div>

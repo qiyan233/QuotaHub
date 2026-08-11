@@ -420,11 +420,16 @@ def parse_referral_summary(html: str) -> ReferralSummary:
     def field(f: str) -> str | None:
         return resolve_resource_ref(_read_field_value(block, f), refs)
 
+    rewards = _parse_rewards(block, refs)
+    # `rewardAmount` is the per-invitation reward (unit price), not the total.
+    # The real total is the sum of the individual rewards. An account that has
+    # never received a reward has an empty rewards list -> total $0.00.
+    reward_amount = round(sum(r.amount for r in rewards), 2)
     return ReferralSummary(
         referral_code=_parse_string(field("referralCode")),
         has_referral=_parse_bool(field("hasReferral")),
-        reward_amount=round((_parse_number(field("rewardAmount")) or 0.0) / 100.0, 2),
-        rewards=_parse_rewards(block, refs),
+        reward_amount=reward_amount,
+        rewards=rewards,
     )
 
 

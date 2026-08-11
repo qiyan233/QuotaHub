@@ -47,7 +47,9 @@ def test_hoisted_scalar_refs():
     $R[3] = 300
     '''
     summary = parse_referral_summary(html)
-    assert summary.reward_amount == 5.0
+    # reward_amount = sum of rewards; the single reward is 300 cents = $3.00.
+    # (The page's rewardAmount=500 is the per-invite unit price, not the total.)
+    assert summary.reward_amount == 3.0
     assert len(summary.rewards) == 1
     assert summary.rewards[0].amount == 3.0
 
@@ -76,3 +78,33 @@ def test_has_referral_without_rewards_field():
     summary = parse_referral_summary(html)
     assert summary.referral_code == "QH-6"
     assert summary.rewards == []
+
+
+def test_empty_rewards_means_zero_total():
+    """rewards=[] but rewardAmount present -> total must be $0.00 (no bonus actually received)."""
+    html = '''
+    obj = { referralCode: "1GNQQN4E9X", hasReferral: !0, rewardAmount: 500,
+      rewards: [] }
+    '''
+    summary = parse_referral_summary(html)
+    assert summary.referral_code == "1GNQQN4E9X"
+    assert summary.has_referral is True
+    assert summary.reward_amount == 0.0
+    assert summary.rewards == []
+
+
+def test_reward_amount_is_sum_of_rewards_not_unit_price():
+    """rewardAmount is per-invite unit price; total must be the rewards sum."""
+    html = '''
+    obj = { referralCode: "QH-7", hasReferral: !0, rewardAmount: 200,
+      rewards: [
+        {id:"rw_a", source:"referral", status:"available", email:"a@b.c", amount:200,
+         timeCreated:"2026-07-01T00:00:00Z"},
+        {id:"rw_b", source:"referral", status:"applied", email:"b@c.d", amount:300,
+         timeCreated:"2026-07-01T00:00:00Z"}
+      ] }
+    '''
+    summary = parse_referral_summary(html)
+    assert len(summary.rewards) == 2
+    # 2.00 + 3.00 = 5.00, NOT the unit price 2.00.
+    assert summary.reward_amount == 5.0
