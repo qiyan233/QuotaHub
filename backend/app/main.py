@@ -44,7 +44,6 @@ from .schemas import (
     ServiceConfigUpdate,
 )
 from .usage_sync import backfill_usage, sync_usage_incremental
-
 FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
 _sync_task: asyncio.Task[None] | None = None
@@ -605,6 +604,14 @@ app.include_router(accounts_router)
 @app.get("/api/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/update/status", dependencies=[Depends(require_auth)])
+async def update_status() -> dict:
+    from .update import check_for_update
+
+    status = await check_for_update()
+    return status.to_dict()
 
 
 @app.get("/api/quota", dependencies=[Depends(require_auth)])

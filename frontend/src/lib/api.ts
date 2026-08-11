@@ -207,6 +207,14 @@ export interface ServiceConfigUpdateBody {
   usage_sync?: Partial<UsageSyncSettings>;
 }
 
+export interface UpdateStatusResponse {
+  current_version: string;
+  latest_version: string;
+  update_available: boolean;
+  is_latest: boolean;
+  checking: boolean;
+}
+
 export interface ReferralReward {
   id: string;
   source: string;
@@ -371,6 +379,7 @@ export const api = {
     return request<AllUsageListResponse>(`/api/usage/all${qs ? `?${qs}` : ""}`);
   },
   health: () => request<{ status: string }>("/api/health"),
+  updateStatus: () => request<UpdateStatusResponse>("/api/update/status"),
 
   listOpenCodeAccounts: () => request<OpenCodeAccount[]>("/api/accounts/opencode"),
   createOpenCodeAccount: (body: Record<string, unknown>) =>

@@ -3,7 +3,7 @@ name: quotahub
 services:
   quotahub:
     build: .
-    image: quotahub:latest
+    image: ghcr.io/qiyan233/quotahub:latest
     container_name: quotahub
     restart: unless-stopped
     network_mode: host
@@ -17,9 +17,31 @@ services:
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
     volumes:
       - ./data:/data
+    labels:
+      # watchtower 自动更新用；不启用 watchtower 时可删除
+      com.centurylinklabs.watchtower.enable: "true"
+      com.centurylinklabs.watchtower.scope: "quotahub"
     # 从 v0.1 / 初版 v0.2 升级时，可临时挂载 config.json 以导入账号与设置：
     # environment:
     #   QUOTAHUB_CONFIG: /data/config.json
     # volumes:
     #   - ./data:/data
     #   - ./config.json:/data/config.json:ro
+
+  # ---- 可选：自动更新 watchtower ----
+  # 启用后 watchtower 会定期拉取最新镜像并重建 quotahub 容器。
+  # 与上面 quotahub 服务的 watchtower label 配套，默认未启用：
+  # watchtower:
+  #   image: containrrr/watchtower:latest
+  #   container_name: watchtower
+  #   restart: unless-stopped
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+  #   environment:
+  #     WATCHTOWER_CLEANUP: "true"
+  #     WATCHTOWER_SCOPE: "quotahub"
+  #     # 每 6 小时检查一次；需要代理时设置 HTTP_PROXY/HTTPS_PROXY
+  #     # WATCHTOWER_POLL_INTERVAL: "6h"
+  #     # HTTP_PROXY: ${HTTP_PROXY:-}
+  #     # HTTPS_PROXY: ${HTTPS_PROXY:-}
+  #   command: --scope quotahub --interval 21600

@@ -15,10 +15,13 @@ RUN pnpm build
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS runtime
 WORKDIR /app/backend
 
+ARG QUOTAHUB_VERSION=unknown
+
 ENV PYTHONUNBUFFERED=1 \
     QUOTAHUB_DATA=/data \
     QUOTAHUB_LISTEN_HOST=0.0.0.0 \
-    QUOTAHUB_LISTEN_PORT=8788
+    QUOTAHUB_LISTEN_PORT=8788 \
+    QUOTAHUB_VERSION=${QUOTAHUB_VERSION}
 
 COPY backend/pyproject.toml ./
 RUN --mount=type=cache,target=/root/.cache/uv \

@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { Copy, Download, RefreshCw } from "lucide-react";
 import { useQuota } from "@/contexts/QuotaContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { api, type AppConfigResponse, type RefreshSettings, type UsageSyncSettings } from "@/lib/api";
+import {
+  api,
+  type AppConfigResponse,
+  type RefreshSettings,
+  type UpdateStatusResponse,
+  type UsageSyncSettings,
+} from "@/lib/api";
 import { showToast } from "@/lib/toast";
 
 function ToggleRow({
@@ -82,6 +89,9 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const readyRef = useRef(false);
   const lastSavedRef = useRef("");
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatusResponse | null>(null);
+  const [updateLoading, setUpdateLoading] = useState(false);
+  const [updateCopied, setUpdateCopied] = useState(false);
   const saveTimerRef = useRef<number | undefined>(undefined);
   const savingRef = useRef(false);
 
@@ -137,6 +147,35 @@ export default function SettingsPage() {
       void persist();
     }, 600);
   }, [persist]);
+
+  const checkForUpdate = useCallback(async () => {
+    setUpdateLoading(true);
+    try {
+      setUpdateStatus(await api.updateStatus());
+      setUpdateCopied(false);
+    } catch (e) {
+      setUpdateStatus({
+        current_version: "",
+        latest_version: "",
+        update_available: false,
+        is_latest: true,
+        checking: false,
+      });
+      showToast((e as Error).message, "error");
+    } finally {
+      setUpdateLoading(false);
+    }
+  }, []);
+
+  const copyUpdateCommand = useCallback(async () => {
+    const cmd = "docker compose pull && docker compose up -d --force-recreate";
+    try {
+      await navigator.clipboard.writeText(cmd);
+      setUpdateCopied(true);
+    } catch {
+      showToast("复制失败，请手动复制", "error");
+    }
+  }, []);
 
   useEffect(() => {
     void load();
@@ -310,6 +349,60 @@ export default function SettingsPage() {
             <CardContent className="text-sm text-muted-foreground">
               <p>已从 config.json 导入：{config?.accounts_imported ? "是" : "否"}</p>
               <p className="mt-2">导入后请在「账号管理」页面维护账号。</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Download className="h-4 w-4 text-cyan-600" />
+                检查更新
+              </CardTitle>
+              <Button variant="outline" size="sm" onClick={() => void checkForUpdate()} disabled={updateLoading}>
+                <RefreshCw className={`h-4 w-4 ${updateLoading ? "animate-spin" : ""}`} />
+                {updateLoading ? "检查中…" : "检查更新"}
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              {updateStatus ? (
+                <>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <span className="text-muted-foreground">
+                      当前版本：<span className="font-mono text-slate-800">{updateStatus.current_version || "未知"}</span>
+                    </span>
+                    {updateStatus.update_available && (
+                      <span className="text-muted-foreground">
+                        最新版本：<span className="font-mono text-emerald-700">{updateStatus.latest_version}</span>
+                      </span>
+                    )}
+                  </div>
+                  {updateStatus.update_available ? (
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                      <p className="text-emerald-800">
+                        发现新版本 <span className="font-mono font-semibold">{updateStatus.latest_version}</span>，请运行以下命令更新：
+                      </p>
+                      <div className="mt-2 flex items-center gap-2">
+                        <code className="flex-1 overflow-x-auto rounded-lg bg-white px-3 py-2 font-mono text-xs text-slate-700">
+                          docker compose pull && docker compose up -d --force-recreate
+                        </code>
+                        <Button variant="outline" size="sm" onClick={() => void copyUpdateCommand()}>
+                          <Copy className="h-3.5 w-3.5" />
+                          {updateCopied ? "已复制" : "复制"}
+                        </Button>
+                      </div>
+                      <p className="mt-2 text-xs text-emerald-700">
+                        或在 docker-compose.yml 中启用 watchtower 实现全自动更新。
+                      </p>
+                    </div>
+                  ) : updateStatus.latest_version ? (
+                    <p className="text-emerald-700">已是最新版本，无需更新。</p>
+                  ) : (
+                    <p className="text-muted-foreground">无法连接 GitHub，请稍后重试。</p>
+                  )}
+                </>
+              ) : (
+                <p className="text-muted-foreground">点击"检查更新"查看是否有新版本。</p>
+              )}
             </CardContent>
           </Card>
 
