@@ -1,5 +1,6 @@
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Cloud, RefreshCw, Waves } from "lucide-react";
+import { ArrowUpDown, Cloud, RefreshCw, Waves } from "lucide-react";
 import {
   OllamaAccountCard,
   OpenGoAccountCard,
@@ -8,6 +9,18 @@ import { useQuota } from "@/contexts/QuotaContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  QUOTA_SORT_OPTIONS,
+  sortAccountsByQuotaMode,
+  type QuotaSortOption,
+} from "@/lib/quota-sort";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { ReactNode } from "react";
 
 function AccountSection({
@@ -84,6 +97,19 @@ export default function DashboardPage() {
     refreshOpenGo,
   } = useQuota();
 
+  // 排序方式仅本次会话内生效（不写入 localStorage）。
+  const [sortMode, setSortMode] = useState<QuotaSortOption>("usable");
+
+  const sortedOllamaAccounts = useMemo(() => {
+    if (sortMode === "usable") return ollamaAccounts; // context 已按可用优先排好
+    return sortAccountsByQuotaMode(ollamaAccounts, sortMode);
+  }, [ollamaAccounts, sortMode]);
+
+  const sortedOpenGoAccounts = useMemo(() => {
+    if (sortMode === "usable") return openGoAccounts;
+    return sortAccountsByQuotaMode(openGoAccounts, sortMode);
+  }, [openGoAccounts, sortMode]);
+
   const totalCount = ollamaAccounts.length + openGoAccounts.length;
   const isEmpty = configReady && totalCount === 0;
 
@@ -116,6 +142,28 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-10">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+        <div className="flex items-center gap-2">
+          <ArrowUpDown className="h-4 w-4 text-slate-500" />
+          <span className="text-sm font-medium text-slate-700">账号排序</span>
+        </div>
+        <Select
+          value={sortMode}
+          onValueChange={(value) => setSortMode(value as QuotaSortOption)}
+        >
+          <SelectTrigger className="w-60">
+            <SelectValue placeholder="选择排序方式" />
+          </SelectTrigger>
+          <SelectContent>
+            {QUOTA_SORT_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
       {(ollamaError || openGoError) && (
         <div className="space-y-2">
           {ollamaError && (
@@ -143,7 +191,7 @@ export default function DashboardPage() {
         onRefresh={() => void refreshOllama()}
       >
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {ollamaAccounts.map((account) => (
+          {sortedOllamaAccounts.map((account) => (
             <OllamaAccountCard
               key={account.account_id || account.name}
               account={account}
@@ -165,7 +213,7 @@ export default function DashboardPage() {
         onRefresh={() => void refreshOpenGo()}
       >
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {openGoAccounts.map((account) => (
+          {sortedOpenGoAccounts.map((account) => (
             <OpenGoAccountCard
               key={account.account_id || account.name}
               account={account}
