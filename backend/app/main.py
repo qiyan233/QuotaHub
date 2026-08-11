@@ -4,19 +4,25 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from . import db
+from .auth import create_token, is_auth_enabled, require_auth, verify_password
 from .bootstrap import ensure_bootstrapped
 from .analytics import build_overview
 from .config import load_config, load_service_config, mask_cookie, mask_ollama_cookie, update_service_config
 from .ollama_quota import fetch_all_ollama_quotas
 from .opencode_usage import resolve_account_workspace_id
 from .quota import fetch_all_quotas, fetch_quota_for_account
+from .referral import (
+    apply_referral_reward,
+    fetch_referral_summary,
+    preview_referral_reward,
+)
 from .schemas import (
     OllamaAccountCreate,
     OllamaAccountUpdate,
@@ -87,7 +93,49 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-accounts_router = APIRouter(prefix="/api/accounts", tags=["accounts"])
+accounts_router = APIRouter(prefix="/api/accounts", tags=["accounts"], dependencies=[Depends(require_auth)])
+
+
+@app.post("/api/auth/login")
+async def login(request: Request, body: dict[str, str]) -> dict:
+    import time as _time
+
+    password = (body.get("password") or "").strip()
+    if not is_auth_enabled():
+        return {"token": None, "enabled": False}
+
+    # Resolve real client IP (nginx sets X-Forwarded-For)
+    ip = request.client.host if request.client else "unknown"
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        ip = forwarded.split(",")[0].strip() or ip
+
+    now = _time.time()
+    locked, locked_until = db.is_login_locked(ip, now)
+    if locked:
+        remaining = int(locked_until - now)
+        raise HTTPException(
+            status_code=429,
+            detail=f"登录尝试过多，请 {max(1, remaining // 60)} 分钟后重试",
+            headers={"Retry-After": str(remaining)},
+        )
+
+    if not verify_password(password):
+        fail_count = db.record_login_failure(ip, now)
+        if fail_count >= db.LOGIN_MAX_FAILURES:
+            raise HTTPException(
+                status_code=429,
+                detail=f"登录失败次数过多，已临时锁定。请稍后重试",
+            )
+        raise HTTPException(status_code=401, detail="密码错误")
+
+    db.reset_login_attempt(ip)
+    return {"token": create_token(), "enabled": True}
+
+
+@app.get("/api/auth/status")
+async def auth_status() -> dict:
+    return {"enabled": is_auth_enabled()}
 
 
 def _opencode_account_dict(row: db.OpenCodeAccountRow) -> dict[str, Any]:
@@ -236,6 +284,46 @@ async def opencode_account_quota(account_id: str) -> dict[str, Any]:
     return quota.to_dict()
 
 
+@accounts_router.get("/opencode/{account_id}/referral")
+async def opencode_account_referral(account_id: str) -> dict[str, Any]:
+    row = db.get_opencode_account(account_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    workspace_id = row.resolved_workspace_id or row.workspace_id
+    try:
+        summary = await fetch_referral_summary(workspace_id, row.auth_cookie)
+        return {"success": True, **summary.to_dict()}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+@accounts_router.post("/opencode/{account_id}/referral/{reward_id}/preview")
+async def opencode_referral_preview(account_id: str, reward_id: str) -> dict[str, Any]:
+    row = db.get_opencode_account(account_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    workspace_id = row.resolved_workspace_id or row.workspace_id
+    try:
+        preview = await preview_referral_reward(workspace_id, row.auth_cookie, reward_id)
+        return {"success": True, **preview.to_dict()}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+@accounts_router.post("/opencode/{account_id}/referral/{reward_id}/apply")
+async def opencode_referral_apply(account_id: str, reward_id: str) -> dict[str, Any]:
+    row = db.get_opencode_account(account_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    workspace_id = row.resolved_workspace_id or row.workspace_id
+    try:
+        await apply_referral_reward(workspace_id, row.auth_cookie, reward_id)
+        summary = await fetch_referral_summary(workspace_id, row.auth_cookie)
+        return {"success": True, **summary.to_dict()}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
 @accounts_router.get("/opencode/{account_id}/usage")
 async def list_account_usage(
     account_id: str,
@@ -338,7 +426,7 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/api/quota")
+@app.get("/api/quota", dependencies=[Depends(require_auth)])
 async def quota() -> list[dict]:
     try:
         cfg = load_config()
@@ -367,7 +455,7 @@ async def quota() -> list[dict]:
     return results
 
 
-@app.get("/api/ollama/quota")
+@app.get("/api/ollama/quota", dependencies=[Depends(require_auth)])
 async def ollama_quota() -> list[dict]:
     try:
         cfg = load_config()
@@ -394,7 +482,7 @@ async def ollama_quota() -> list[dict]:
     return results
 
 
-@app.get("/api/analytics/overview")
+@app.get("/api/analytics/overview", dependencies=[Depends(require_auth)])
 async def analytics_overview() -> dict[str, Any]:
     try:
         return await build_overview()
@@ -402,17 +490,17 @@ async def analytics_overview() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@app.get("/api/analytics/opencode/daily")
+@app.get("/api/analytics/opencode/daily", dependencies=[Depends(require_auth)])
 async def analytics_opencode_daily(days: int = Query(30, ge=1, le=365)) -> dict[str, Any]:
     return {"days": days, "stats": db.opencode_daily_stats(days)}
 
 
-@app.get("/api/analytics/opencode/daily/models")
+@app.get("/api/analytics/opencode/daily/models", dependencies=[Depends(require_auth)])
 async def analytics_opencode_daily_models(days: int = Query(30, ge=1, le=365)) -> dict[str, Any]:
     return {"days": days, "stats": db.opencode_daily_model_stats(days)}
 
 
-@app.get("/api/usage/all")
+@app.get("/api/usage/all", dependencies=[Depends(require_auth)])
 async def list_all_usage(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -429,7 +517,7 @@ async def list_all_usage(
     }
 
 
-@app.get("/api/config")
+@app.get("/api/config", dependencies=[Depends(require_auth)])
 async def config_status() -> dict:
     try:
         ensure_bootstrapped()
@@ -438,7 +526,7 @@ async def config_status() -> dict:
     return _build_config_response()
 
 
-@app.put("/api/config")
+@app.put("/api/config", dependencies=[Depends(require_auth)])
 async def update_config(body: ServiceConfigUpdate) -> dict:
     try:
         ensure_bootstrapped()

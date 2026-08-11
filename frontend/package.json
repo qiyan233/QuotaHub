@@ -8,6 +8,11 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
   "dependencies": {
     "@radix-ui/react-progress": "^1.1.7",
     "@radix-ui/react-select": "^2.3.3",

@@ -202,8 +202,66 @@ export interface ServiceConfigUpdateBody {
   usage_sync?: Partial<UsageSyncSettings>;
 }
 
+export interface ReferralReward {
+  id: string;
+  source: string;
+  status: string;
+  email: string;
+  amount: number;
+  time_created: string | null;
+  time_applied: string | null;
+}
+
+export interface ReferralSummary {
+  success: boolean;
+  referral_code?: string;
+  has_referral?: boolean;
+  reward_amount?: number;
+  rewards?: ReferralReward[];
+  error?: string;
+}
+
+export interface ReferralUsageWindow {
+  before_percent: number;
+  after_percent: number;
+  reset_in_sec: number;
+}
+
+export interface ReferralUsagePreview {
+  success: boolean;
+  rolling_usage?: ReferralUsageWindow;
+  weekly_usage?: ReferralUsageWindow;
+  monthly_usage?: ReferralUsageWindow;
+  error?: string;
+}
+
+const TOKEN_KEY = "quotahub_token";
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setToken(token: string | null): void {
+  if (token) {
+    localStorage.setItem(TOKEN_KEY, token);
+  } else {
+    localStorage.removeItem(TOKEN_KEY);
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(path, init);
+  const token = getToken();
+  const headers = new Headers(init?.headers);
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  const resp = await fetch(path, { ...init, headers });
+  if (resp.status === 401 && !path.startsWith("/api/auth/login")) {
+    setToken(null);
+    if (!window.location.pathname.startsWith("/login")) {
+      window.location.href = "/login";
+    }
+  }
   if (!resp.ok) {
     let detail = await resp.text();
     try {
@@ -221,6 +279,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  login: (password: string) =>
+    request<{ token: string | null; enabled: boolean }>("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    }),
+  authEnabled: () =>
+    request<{ enabled: boolean }>("/api/auth/status").catch(() => ({ enabled: true })),
   quota: () => request<QuotaAccount[]>("/api/quota"),
   ollamaQuota: () => request<OllamaQuotaAccount[]>("/api/ollama/quota"),
   config: () => request<AppConfigResponse>("/api/config"),
@@ -268,6 +334,16 @@ export const api = {
       { method: "POST" }
     ),
   openCodeQuota: (id: string) => request<QuotaAccount>(`/api/accounts/opencode/${id}/quota`),
+  openCodeReferral: (id: string) =>
+    request<ReferralSummary>(`/api/accounts/opencode/${id}/referral`),
+  previewReferral: (id: string, rewardId: string) =>
+    request<ReferralUsagePreview>(`/api/accounts/opencode/${id}/referral/${rewardId}/preview`, {
+      method: "POST",
+    }),
+  applyReferral: (id: string, rewardId: string) =>
+    request<ReferralSummary>(`/api/accounts/opencode/${id}/referral/${rewardId}/apply`, {
+      method: "POST",
+    }),
   listUsage: (id: string, params?: { offset?: number; limit?: number; key_id?: string }) => {
     const query = new URLSearchParams();
     if (params?.offset != null) query.set("offset", String(params.offset));

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { ArrowLeft, Coins, Gift, RefreshCw } from "lucide-react";
 import { QuotaWindowRow, QuotaLoadingSkeleton } from "@/components/quota/QuotaCards";
 import { UsageTable } from "@/components/usage/UsageTable";
 import { applyOpenCodeCascade } from "@/lib/utils";
@@ -8,9 +8,30 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, type OpenCodeAccount, type QuotaAccount } from "@/lib/api";
+import {
+  api,
+  type OpenCodeAccount,
+  type QuotaAccount,
+  type ReferralReward,
+  type ReferralSummary,
+  type ReferralUsagePreview,
+} from "@/lib/api";
 
-type DetailTab = "quota" | "usage";
+type DetailTab = "quota" | "usage" | "referral";
+
+function RewardStatusBadge({ status }: { status: string }) {
+  const map: Record<string, "success" | "warning" | "default"> = {
+    available: "success",
+    pending: "warning",
+    applied: "default",
+  };
+  const label: Record<string, string> = {
+    available: "可领取",
+    pending: "待处理",
+    applied: "已应用",
+  };
+  return <Badge variant={map[status] ?? "default"}>{label[status] ?? status}</Badge>;
+}
 
 export default function AccountDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -20,6 +41,12 @@ export default function AccountDetailPage() {
   const [loading, setLoading] = useState(true);
   const [quotaLoading, setQuotaLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const [referral, setReferral] = useState<ReferralSummary | null>(null);
+  const [referralLoading, setReferralLoading] = useState(false);
+  const [referralError, setReferralError] = useState("");
+  const [preview, setPreview] = useState<ReferralUsagePreview | null>(null);
+  const [applyingId, setApplyingId] = useState<string | null>(null);
 
   const loadAccount = useCallback(async () => {
     if (!id) return;
@@ -40,6 +67,44 @@ export default function AccountDetailPage() {
     }
   }, [id]);
 
+  const loadReferral = useCallback(async () => {
+    if (!id) return;
+    setReferralLoading(true);
+    setReferralError("");
+    try {
+      setReferral(await api.openCodeReferral(id));
+      setPreview(null);
+    } catch (e) {
+      setReferralError((e as Error).message);
+    } finally {
+      setReferralLoading(false);
+    }
+  }, [id]);
+
+  const handlePreview = async (rewardId: string) => {
+    if (!id) return;
+    setReferralError("");
+    try {
+      setPreview(await api.previewReferral(id, rewardId));
+    } catch (e) {
+      setReferralError((e as Error).message);
+    }
+  };
+
+  const handleApply = async (rewardId: string) => {
+    if (!id) return;
+    setApplyingId(rewardId);
+    setReferralError("");
+    try {
+      setReferral(await api.applyReferral(id, rewardId));
+      setPreview(null);
+    } catch (e) {
+      setReferralError((e as Error).message);
+    } finally {
+      setApplyingId(null);
+    }
+  };
+
   useEffect(() => {
     if (!id) return;
     void (async () => {
@@ -52,6 +117,12 @@ export default function AccountDetailPage() {
       }
     })();
   }, [id, loadAccount, refreshQuota]);
+
+  useEffect(() => {
+    if (tab === "referral" && !referral && !referralLoading) {
+      void loadReferral();
+    }
+  }, [tab, referral, referralLoading, loadReferral]);
 
   if (!id) {
     return <p className="text-sm text-rose-600">无效账号 ID</p>;
@@ -105,6 +176,9 @@ export default function AccountDetailPage() {
           <TabsTrigger active={tab === "usage"} onClick={() => setTab("usage")}>
             使用记录
           </TabsTrigger>
+          <TabsTrigger active={tab === "referral"} onClick={() => setTab("referral")}>
+            赠金
+          </TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -152,6 +226,154 @@ export default function AccountDetailPage() {
             <UsageTable accountId={id} />
           </CardContent>
         </Card>
+      )}
+
+      {tab === "referral" && (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between">
+              <div className="flex items-center gap-2">
+                <Coins className="h-5 w-5 text-amber-500" />
+                <CardTitle className="text-base">赠金概览</CardTitle>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void loadReferral()}
+                disabled={referralLoading}
+              >
+                <RefreshCw className={`h-4 w-4 ${referralLoading ? "animate-spin" : ""}`} />
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {referralError && (
+                <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                  {referralError}
+                </div>
+              )}
+              {referralLoading && !referral ? (
+                <QuotaLoadingSkeleton rows={2} />
+              ) : referral?.success === false ? (
+                <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                  {referral.error || "获取赠金信息失败"}
+                </div>
+              ) : (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                      <p className="text-xs text-muted-foreground">邀请码</p>
+                      <p className="font-mono text-sm font-semibold text-slate-800">
+                        {referral?.referral_code || "—"}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                      <p className="text-xs text-muted-foreground">赠金总额</p>
+                      <p className="font-mono text-sm font-semibold text-amber-700">
+                        ${referral?.reward_amount?.toFixed(2) ?? "—"}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                      <p className="text-xs text-muted-foreground">可用奖励</p>
+                      <p className="text-sm font-semibold text-slate-800">
+                        {referral?.rewards?.filter((r) => r.status === "available").length ?? 0} 笔
+                      </p>
+                    </div>
+                  </div>
+
+                  {referral?.rewards && referral.rewards.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                        <Gift className="h-4 w-4 text-cyan-600" />
+                        邀请奖励列表
+                      </p>
+                      <div className="space-y-2">
+                        {referral.rewards.map((reward: ReferralReward) => (
+                          <div
+                            key={reward.id}
+                            className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-slate-800">
+                                  {reward.email || "未署名"}
+                                </span>
+                                <RewardStatusBadge status={reward.status} />
+                              </div>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                来源：{reward.source || "—"} · 时间：
+                                {reward.time_created
+                                  ? new Date(reward.time_created).toLocaleString("zh-CN")
+                                  : "—"}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="font-mono text-sm font-semibold text-amber-700">
+                                ${reward.amount.toFixed(2)}
+                              </span>
+                              {reward.status === "available" && (
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => void handlePreview(reward.id)}
+                                  >
+                                    预览
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => void handleApply(reward.id)}
+                                    disabled={applyingId === reward.id}
+                                  >
+                                    {applyingId === reward.id ? "应用中…" : "领取"}
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {preview && (
+                    <div className="rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-3">
+                      <p className="mb-2 text-sm font-medium text-cyan-800">领取后额度变化预览</p>
+                      <div className="grid gap-2 text-xs sm:grid-cols-3">
+                        {[
+                          ["5h Rolling", preview.rolling_usage],
+                          ["Weekly", preview.weekly_usage],
+                          ["Monthly", preview.monthly_usage],
+                        ].map(([label, window]) => {
+                          const w = window as ReferralUsagePreview[keyof Omit<
+                            ReferralUsagePreview,
+                            "success" | "error"
+                          >] | undefined;
+                          if (!w) return null;
+                          return (
+                            <div key={label as string} className="rounded-lg bg-white px-3 py-2">
+                              <p className="font-medium text-slate-700">{label as string}</p>
+                              <p className="mt-1 text-slate-600">
+                                {w.before_percent.toFixed(1)}% →{" "}
+                                <span className="font-semibold text-emerald-600">
+                                  {w.after_percent.toFixed(1)}%
+                                </span>
+                              </p>
+                              <p className="text-[11px] text-muted-foreground">
+                                {w.reset_in_sec > 0
+                                  ? `${Math.round(w.reset_in_sec / 3600)}h 后重置`
+                                  : "已重置"}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       )}
     </div>
   );

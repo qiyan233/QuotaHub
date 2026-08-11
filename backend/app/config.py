@@ -75,6 +75,7 @@ class ServiceConfig:
     refresh_opencode_go: RefreshSettings
     opencode: OpenCodeSettings
     usage_sync: UsageSyncSettings
+    panel_password: str = ""
 
 
 @dataclass
@@ -243,6 +244,7 @@ def load_service_config() -> ServiceConfig:
         refresh_opencode_go=_parse_refresh_settings(refresh_raw.get("opencode_go"), default_interval=60),
         opencode=_parse_opencode_settings(settings.get("opencode")),
         usage_sync=_parse_usage_sync_settings(settings.get("usage_sync")),
+        panel_password=os.environ.get("QUOTAHUB_PASSWORD", "").strip(),
     )
 
 

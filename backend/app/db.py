@@ -108,6 +108,13 @@ def init_db() -> None:
                 payload TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS login_attempts (
+                ip TEXT PRIMARY KEY,
+                fail_count INTEGER NOT NULL DEFAULT 0,
+                locked_until REAL,
+                last_fail_at REAL
+            );
             """
         )
 
@@ -744,3 +751,92 @@ def count_opencode_accounts() -> int:
 def count_ollama_accounts() -> int:
     with get_conn() as conn:
         return int(conn.execute("SELECT COUNT(*) FROM ollama_accounts").fetchone()[0])
+
+
+# ---- Login brute-force protection (persisted in SQLite) ----
+
+LOGIN_MAX_FAILURES = 5
+LOGIN_BASE_LOCK_SEC = 900  # 15 minutes for first lock
+LOGIN_LOCK_MAX_SEC = 4 * 3600  # cap at 4 hours
+
+
+def get_login_attempt(ip: str) -> dict[str, Any]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT ip, fail_count, locked_until, last_fail_at FROM login_attempts WHERE ip = ?",
+            (ip,),
+        ).fetchone()
+    if row is None:
+        return {"fail_count": 0, "locked_until": None, "last_fail_at": None}
+    return {
+        "fail_count": int(row["fail_count"]),
+        "locked_until": row["locked_until"],
+        "last_fail_at": row["last_fail_at"],
+    }
+
+
+def reset_login_attempt(ip: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM login_attempts WHERE ip = ?", (ip,))
+
+
+def record_login_failure(ip: str, now: float) -> int:
+    """Increment failure count, return new count. Applies escalating lock. Returns 0 on reset."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT fail_count, locked_until, last_fail_at FROM login_attempts WHERE ip = ?",
+            (ip,),
+        ).fetchone()
+        if row is None:
+            fail_count = 1
+            locked_until: float | None = None
+            last_fail_at = now
+            conn.execute(
+                "INSERT INTO login_attempts (ip, fail_count, locked_until, last_fail_at) VALUES (?, ?, ?, ?)",
+                (ip, fail_count, locked_until, now),
+            )
+            conn.commit()
+            return fail_count
+
+        fail_count = int(row["fail_count"]) + 1
+        last_fail_at = float(row["last_fail_at"]) if row["last_fail_at"] else now
+        # Clear stale lock if lock window already passed (checked by caller, but be safe)
+        locked_until = row["locked_until"]
+        if locked_until is not None and float(locked_until) <= now:
+            locked_until = None
+            fail_count = 1
+
+        # Apply escalating lock when threshold reached
+        new_lock: float | None = None
+        if fail_count >= LOGIN_MAX_FAILURES:
+            if locked_until is not None:
+                # extend: double remaining lock time from now, capped
+                remaining = float(locked_until) - now
+                new_lock = now + min(max(remaining * 2, LOGIN_BASE_LOCK_SEC), LOGIN_LOCK_MAX_SEC)
+            else:
+                new_lock = now + LOGIN_BASE_LOCK_SEC
+            conn.execute(
+                "UPDATE login_attempts SET fail_count = ?, locked_until = ?, last_fail_at = ? WHERE ip = ?",
+                (fail_count, new_lock, now, ip),
+            )
+        else:
+            conn.execute(
+                "UPDATE login_attempts SET fail_count = ?, last_fail_at = ? WHERE ip = ?",
+                (fail_count, now, ip),
+            )
+        conn.commit()
+        return fail_count
+
+
+def is_login_locked(ip: str, now: float) -> tuple[bool, float | None]:
+    """Return (locked, locked_until_epoch). If locked, remaining seconds > 0."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT fail_count, locked_until FROM login_attempts WHERE ip = ?", (ip,)
+        ).fetchone()
+    if row is None or row["locked_until"] is None:
+        return False, None
+    locked_until = float(row["locked_until"])
+    if locked_until <= now:
+        return False, None
+    return True, locked_until
