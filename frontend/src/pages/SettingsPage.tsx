@@ -154,157 +154,168 @@ export default function SettingsPage() {
     return <p className="text-sm text-muted-foreground">加载中…</p>;
   }
 
+  // On the forced first-login change, show only the credential card at the
+  // very top so the user cannot miss it.
+  const changeCredCard = (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">修改登录账号</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs text-muted-foreground">
+          修改后需要重新登录，所有已登录会话将失效。
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="space-y-1 text-sm">
+            <span className="text-muted-foreground">当前密码</span>
+            <Input
+              type="password"
+              placeholder={forced ? "首次修改无需填写" : "当前密码"}
+              value={credCurrent}
+              disabled={forced}
+              onChange={(e) => setCredCurrent(e.target.value)}
+            />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="text-muted-foreground">新账号</span>
+            <Input
+              placeholder="账号名"
+              value={credUsername}
+              onChange={(e) => setCredUsername(e.target.value)}
+            />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="text-muted-foreground">新密码（至少 6 位）</span>
+            <Input
+              type="password"
+              placeholder="新密码"
+              value={credPassword}
+              onChange={(e) => setCredPassword(e.target.value)}
+            />
+          </label>
+        </div>
+        <Button
+          disabled={credSaving || !credPassword || credPassword.length < 6}
+          onClick={async () => {
+            setCredSaving(true);
+            try {
+              const res = await api.changeCredentials(
+                credUsername || "admin",
+                credPassword,
+                forced ? undefined : credCurrent
+              );
+              showToast(`账号已更新为 ${res.username}`);
+              navigate("/login", { replace: true });
+            } catch (e) {
+              showToast((e as Error).message, "error");
+            } finally {
+              setCredSaving(false);
+            }
+          }}
+        >
+          {credSaving ? "保存中…" : "保存账号密码"}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Ollama 额度自动刷新</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <ToggleRow
-            label="自动刷新"
-            checked={refreshOllama.auto_refresh}
-            onChange={(value) => setRefreshOllama((prev) => ({ ...prev, auto_refresh: value }))}
-          />
-          <NumberRow
-            label="刷新间隔（秒）"
-            value={refreshOllama.interval_sec}
-            min={15}
-            onChange={(value) => setRefreshOllama((prev) => ({ ...prev, interval_sec: value }))}
-          />
-        </CardContent>
-      </Card>
+      {forced ? (
+        <div className="space-y-4">
+          <Card className="border-amber-300 bg-amber-50">
+            <CardContent className="py-3 text-sm text-amber-800">
+              首次登录：请先修改初始账号与密码，修改后需重新登录。
+            </CardContent>
+          </Card>
+          {changeCredCard}
+        </div>
+      ) : (
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Ollama 额度自动刷新</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <ToggleRow
+                label="自动刷新"
+                checked={refreshOllama.auto_refresh}
+                onChange={(value) => setRefreshOllama((prev) => ({ ...prev, auto_refresh: value }))}
+              />
+              <NumberRow
+                label="刷新间隔（秒）"
+                value={refreshOllama.interval_sec}
+                min={15}
+                onChange={(value) => setRefreshOllama((prev) => ({ ...prev, interval_sec: value }))}
+              />
+            </CardContent>
+          </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">OpenCode Go 额度自动刷新</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <ToggleRow
-            label="自动刷新"
-            checked={refreshOpenGo.auto_refresh}
-            onChange={(value) => setRefreshOpenGo((prev) => ({ ...prev, auto_refresh: value }))}
-          />
-          <NumberRow
-            label="刷新间隔（秒）"
-            value={refreshOpenGo.interval_sec}
-            min={15}
-            onChange={(value) => setRefreshOpenGo((prev) => ({ ...prev, interval_sec: value }))}
-          />
-        </CardContent>
-      </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">OpenCode Go 额度自动刷新</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <ToggleRow
+                label="自动刷新"
+                checked={refreshOpenGo.auto_refresh}
+                onChange={(value) => setRefreshOpenGo((prev) => ({ ...prev, auto_refresh: value }))}
+              />
+              <NumberRow
+                label="刷新间隔（秒）"
+                value={refreshOpenGo.interval_sec}
+                min={15}
+                onChange={(value) => setRefreshOpenGo((prev) => ({ ...prev, interval_sec: value }))}
+              />
+            </CardContent>
+          </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">使用记录同步</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <ToggleRow
-            label="自动同步"
-            checked={usageSync.auto_sync}
-            onChange={(value) => setUsageSync((prev) => ({ ...prev, auto_sync: value }))}
-          />
-          <NumberRow
-            label="同步间隔（秒）"
-            value={usageSync.interval_sec}
-            min={15}
-            onChange={(value) => setUsageSync((prev) => ({ ...prev, interval_sec: value }))}
-          />
-          <NumberRow
-            label="每次补拉页数"
-            value={usageSync.backfill_pages_per_request}
-            min={1}
-            max={50}
-            onChange={(value) => setUsageSync((prev) => ({ ...prev, backfill_pages_per_request: value }))}
-          />
-          <NumberRow
-            label="增量同步页数上限"
-            value={usageSync.max_pages_per_incremental}
-            min={1}
-            max={100}
-            onChange={(value) => setUsageSync((prev) => ({ ...prev, max_pages_per_incremental: value }))}
-          />
-        </CardContent>
-      </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">使用记录同步</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <ToggleRow
+                label="自动同步"
+                checked={usageSync.auto_sync}
+                onChange={(value) => setUsageSync((prev) => ({ ...prev, auto_sync: value }))}
+              />
+              <NumberRow
+                label="同步间隔（秒）"
+                value={usageSync.interval_sec}
+                min={15}
+                onChange={(value) => setUsageSync((prev) => ({ ...prev, interval_sec: value }))}
+              />
+              <NumberRow
+                label="每次补拉页数"
+                value={usageSync.backfill_pages_per_request}
+                min={1}
+                max={50}
+                onChange={(value) => setUsageSync((prev) => ({ ...prev, backfill_pages_per_request: value }))}
+              />
+              <NumberRow
+                label="增量同步页数上限"
+                value={usageSync.max_pages_per_incremental}
+                min={1}
+                max={100}
+                onChange={(value) => setUsageSync((prev) => ({ ...prev, max_pages_per_incremental: value }))}
+              />
+            </CardContent>
+          </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">账号导入</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground">
-          <p>已从 config.json 导入：{config?.accounts_imported ? "是" : "否"}</p>
-          <p className="mt-2">导入后请在「账号管理」页面维护账号。</p>
-        </CardContent>
-      </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">账号导入</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              <p>已从 config.json 导入：{config?.accounts_imported ? "是" : "否"}</p>
+              <p className="mt-2">导入后请在「账号管理」页面维护账号。</p>
+            </CardContent>
+          </Card>
 
-      {forced && (
-        <Card className="border-amber-300 bg-amber-50">
-          <CardContent className="py-3 text-sm text-amber-800">
-            首次登录：请先修改初始账号与密码，修改后需重新登录。
-          </CardContent>
-        </Card>
+          {changeCredCard}
+        </>
       )}
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">修改登录账号</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-xs text-muted-foreground">
-            修改后需要重新登录，所有已登录会话将失效。
-          </p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1 text-sm">
-              <span className="text-muted-foreground">当前密码</span>
-              <Input
-                type="password"
-                placeholder={forced ? "首次修改无需填写" : "当前密码"}
-                value={credCurrent}
-                disabled={forced}
-                onChange={(e) => setCredCurrent(e.target.value)}
-              />
-            </label>
-            <label className="space-y-1 text-sm">
-              <span className="text-muted-foreground">新账号</span>
-              <Input
-                placeholder="账号名"
-                value={credUsername}
-                onChange={(e) => setCredUsername(e.target.value)}
-              />
-            </label>
-            <label className="space-y-1 text-sm">
-              <span className="text-muted-foreground">新密码（至少 6 位）</span>
-              <Input
-                type="password"
-                placeholder="新密码"
-                value={credPassword}
-                onChange={(e) => setCredPassword(e.target.value)}
-              />
-            </label>
-          </div>
-          <Button
-            disabled={credSaving || !credPassword || credPassword.length < 6}
-            onClick={async () => {
-              setCredSaving(true);
-              try {
-                const res = await api.changeCredentials(
-                  credUsername || "admin",
-                  credPassword,
-                  forced ? undefined : credCurrent
-                );
-                showToast(`账号已更新为 ${res.username}`);
-                navigate("/login", { replace: true });
-              } catch (e) {
-                showToast((e as Error).message, "error");
-              } finally {
-                setCredSaving(false);
-              }
-            }}
-          >
-            {credSaving ? "保存中…" : "保存账号密码"}
-          </Button>
-        </CardContent>
-      </Card>
     </div>
   );
 }

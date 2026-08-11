@@ -15,6 +15,7 @@ from .auth import (
     change_credentials,
     create_session_token,
     current_username,
+    get_csrf_token,
     is_auth_enabled,
     is_secure_request,
     new_csrf_token,
@@ -230,11 +231,19 @@ async def session_status(request: Request) -> dict:
     username = current_username(request)
     if not username:
         return {"authenticated": False}
-    return {
-        "authenticated": True,
-        "username": username,
-        "must_change_password": not password_was_changed(username),
-    }
+    # Also refresh the CSRF token header so a page reload can re-populate the
+    # in-memory token from this endpoint (double-submit recovery).
+    csrf = get_csrf_token(request)
+    response = JSONResponse(
+        {
+            "authenticated": True,
+            "username": username,
+            "must_change_password": not password_was_changed(username),
+        }
+    )
+    if csrf:
+        response.headers["X-CSRF-Token"] = csrf
+    return response
 
 
 @app.post("/api/auth/change-credentials", dependencies=[Depends(require_auth)])

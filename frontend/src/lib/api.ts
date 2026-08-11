@@ -245,8 +245,20 @@ let csrfToken: string | null = null;
  * CSRF protection relies on a server-issued token that the SPA reads from the
  * login response and echoes back on state-changing requests. The session
  * itself lives in an HttpOnly cookie and is never exposed to JS.
+ *
+ * The CSRF cookie itself is deliberately non-HttpOnly, so on a full page
+ * reload (where the in-memory token is lost) we can recover it from the
+ * cookie — the standard double-submit pattern.
  */
+function readCookie(name: string): string | null {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = document.cookie.match(new RegExp("(?:^|; )" + escaped + "=([^;]*)"));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function getCsrfToken(): string | null {
+  if (csrfToken) return csrfToken;
+  csrfToken = readCookie("qh_csrf");
   return csrfToken;
 }
 
