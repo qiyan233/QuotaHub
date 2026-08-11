@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（如 0.3.0）。手动触发时必填；tag 推送时从 tag 名自动解析。"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -25,12 +30,22 @@ jobs:
       - name: Resolve version
         id: meta
         run: |
-          version="${GITHUB_REF_NAME#v}"
           owner_lc="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          # Manual dispatch passes a version explicitly; tag pushes derive it from the ref name.
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            version="${{ github.event.inputs.version }}"
+            version="${version#v}"
+            tag="v${version}"
+            echo "trigger=manual" >> "$GITHUB_OUTPUT"
+          else
+            version="${GITHUB_REF_NAME#v}"
+            tag="${GITHUB_REF_NAME}"
+            echo "trigger=tag" >> "$GITHUB_OUTPUT"
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "image=${REGISTRY}/${owner_lc}/quotahub" >> "$GITHUB_OUTPUT"
-          previous_tag="$(git tag --list 'v*' --sort=-v:refname | grep -v "^${GITHUB_REF_NAME}$" | head -n 1 || true)"
+          previous_tag="$(git tag --list 'v*' --sort=-v:refname | grep -v "^${tag}$" | head -n 1 || true)"
           echo "previous_tag=${previous_tag}" >> "$GITHUB_OUTPUT"
 
       - uses: pnpm/action-setup@v4
@@ -95,6 +110,7 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.meta.outputs.tag }}
           body_path: dist/release-notes.md
           files: |
             dist/quotahub-${{ steps.meta.outputs.tag }}-uv.zip
